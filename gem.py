@@ -189,8 +189,8 @@ def run_live(debug):
     keyboard.add_hotkey('k', toggle_bot)
     is_pressing, track_was_present = False, False
     
-    with mss.mss() as sct:
-        monitor = sct.monitors[0]  # Фокусируемся на первом основном мониторе
+    with mss.MSS() as sct:
+        monitor = sct.monitors[1]  # Фокусируемся на первом основном мониторе
         print("Запущено успешно. Нажмите K для старта бота.")
         prev = time.perf_counter()
         fps = 0.0
@@ -218,6 +218,7 @@ def run_live(debug):
                                 input_queue.put("down")
                                 is_pressing = True
                                 print("[БОТ] Маркер ниже зоны — зажали ЛКМ")
+                                time.sleep(0.3)
                                 
                         elif z_top <= m_y <= z_bot:
                             # МАРКЕР КОСНУЛСЯ ИЛИ ВОШЕЛ В ЗОНУ -> мгновенно отжимаем
