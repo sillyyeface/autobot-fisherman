@@ -22,7 +22,8 @@ BASE_HEIGHT = 1080
 CANNY_LO, CANNY_HI = 40, 120
 
 # base (1080p) detection thresholds, scaled at runtime per monitor height
-MIN_SIDE_LEN, MAX_SIDE_THICK = 80, 6
+MIN_FRAG_LEN, MAX_SIDE_THICK = 40, 6
+RAIL_GAP_X = 10
 MIN_WIDTH, MAX_WIDTH = 20, 250
 MIN_HEIGHT, MAX_HEIGHT = 100, 1400
 MIN_ASPECT, MAX_ASPECT = 3.0, 14.0
@@ -33,8 +34,28 @@ ZONE_MIN_AREA, MARKER_MIN_AREA, ROI_PAD = 40, 100, 6
 ZONE_HSV_LO, ZONE_HSV_HI = (20, 50, 40), (75, 255, 255)
 MARKER_HSV_LO, MARKER_HSV_HI = (0, 0, 160), (180, 45, 255)
 
+# region of the screen to scan, as fractions of monitor size, centered at
+# (center_x, center_y). scanning only this box instead of the full screen is
+# the single biggest speed win. calibrated for a track anchored near the
+# right edge of the screen — tune to where it shows on your screen if
+# different, tighter box = higher fps. run with --debug to see the scan box.
+SEARCH_WIDTH_FRAC = 0.16
+SEARCH_HEIGHT_FRAC = 0.55
+SEARCH_CENTER_X_FRAC = 0.75
+SEARCH_CENTER_Y_FRAC = 0.48
+
 bot_enabled = False
 input_queue = Queue()
+
+
+def build_search_region(monitor):
+    w = int(monitor["width"] * SEARCH_WIDTH_FRAC)
+    h = int(monitor["height"] * SEARCH_HEIGHT_FRAC)
+    cx = int(monitor["width"] * SEARCH_CENTER_X_FRAC)
+    cy = int(monitor["height"] * SEARCH_CENTER_Y_FRAC)
+    left = monitor["left"] + max(0, cx - w // 2)
+    top = monitor["top"] + max(0, cy - h // 2)
+    return {"left": left, "top": top, "width": w, "height": h}
 
 
 def scale_int(value, scale):
@@ -44,8 +65,9 @@ def scale_int(value, scale):
 def build_params(scale):
     # linear sizes scale by monitor_height/1080, areas scale by that squared
     return {
-        "min_side_len": scale_int(MIN_SIDE_LEN, scale),
+        "min_frag_len": scale_int(MIN_FRAG_LEN, scale),
         "max_side_thick": scale_int(MAX_SIDE_THICK, scale),
+        "rail_gap_x": scale_int(RAIL_GAP_X, scale),
         "min_width": scale_int(MIN_WIDTH, scale),
         "max_width": scale_int(MAX_WIDTH, scale),
         "min_height": scale_int(MIN_HEIGHT, scale),
@@ -86,19 +108,37 @@ def get_edges(bgr):
     return cv2.Canny(gray, CANNY_LO, CANNY_HI)
 
 
+def merge_rails(frags, x_tol):
+    # the rail edge often breaks into several short pieces (tick marks and
+    # antialiasing interrupt it) at the same x — group pieces within x_tol of
+    # each other and take the outer y span, turning them back into one rail
+    frags = sorted(frags, key=lambda f: f[0])
+    rails = []
+    for x, y, w, h in frags:
+        merged = False
+        for r in rails:
+            if abs(r[0] - x) <= x_tol:
+                r[1] = min(r[1], y)
+                r[2] = max(r[2], y + h)
+                merged = True
+                break
+        if not merged:
+            rails.append([x, y, y + h])
+    return [(x, y0, 1, y1 - y0) for x, y0, y1 in rails]
+
+
 def find_vertical_segments(edges, p):
     close_k = cv2.getStructuringElement(cv2.MORPH_RECT, (1, p["close_k"]))
     open_k = cv2.getStructuringElement(cv2.MORPH_RECT, (1, p["open_k"]))
     closed = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, close_k)
     vert = cv2.morphologyEx(closed, cv2.MORPH_OPEN, open_k)
     n, _, stats, _ = cv2.connectedComponentsWithStats(vert, 8)
-    segs = []
+    frags = []
     for i in range(1, n):
         x, y, w, h, _ = stats[i]
-        if h >= p["min_side_len"] and w <= p["max_side_thick"]:
-            segs.append((int(x), int(y), int(w), int(h)))
-    segs.sort()
-    return segs
+        if h >= p["min_frag_len"] and w <= p["max_side_thick"]:
+            frags.append((int(x), int(y), int(w), int(h)))
+    return merge_rails(frags, p["rail_gap_x"])
 
 
 def count_ticks(edges, box, p):
@@ -227,42 +267,73 @@ def update_reel(res, is_pressing):
 
 # --- debug overlay: transparent, click-through, drawn directly over the game ---
 class Overlay:
-    def __init__(self, monitor):
+    def __init__(self, monitor, region_offset, region_size):
         self.root = tk.Tk()
         self.root.overrideredirect(True)
         self.root.attributes("-topmost", True)
-        self.root.attributes("-transparentcolor", "black")
         self.root.geometry(f"{monitor['width']}x{monitor['height']}+{monitor['left']}+{monitor['top']}")
         self.canvas = tk.Canvas(self.root, bg="black", highlightthickness=0)
         self.canvas.pack(fill="both", expand=True)
         self.root.update_idletasks()
-        self._make_click_through()
+        self._make_transparent_click_through()
 
-    def _make_click_through(self):
-        # windows only: lets mouse clicks pass through the overlay into the game
-        hwnd = self.root.winfo_id()
-        gwl_exstyle, ws_ex_layered, ws_ex_transparent = -20, 0x80000, 0x20
+        # persistent canvas items, reused every frame instead of recreated
+        # (delete+recreate each frame is the main overlay cost)
+        self.status_id = self.canvas.create_text(20, 20, text="", anchor="nw", font=("Consolas", 14, "bold"))
+        self.fps_id = self.canvas.create_text(20, 45, text="", fill="yellow", anchor="nw", font=("Consolas", 12))
+        self.track_id = self.canvas.create_rectangle(0, 0, 0, 0, outline="#ff0000", width=2, state="hidden")
+        self.zone_id = self.canvas.create_rectangle(0, 0, 0, 0, outline="#00ff00", width=2, state="hidden")
+        self.marker_id = self.canvas.create_rectangle(0, 0, 0, 0, outline="#ffff00", width=2, state="hidden")
+
+        # scan region box, drawn once for calibration, never moves
+        ox, oy = region_offset
+        rw, rh = region_size
+        self.canvas.create_rectangle(ox, oy, ox + rw, oy + rh, outline="#00ffff", dash=(4, 4), width=1)
+
+    def _make_transparent_click_through(self):
+        # windows only: makes the black background see-through, lets clicks
+        # pass through the overlay into the game, and stops the overlay from
+        # ever taking keyboard/mouse focus (WS_EX_NOACTIVATE) so the game and
+        # the k hotkey both keep working normally.
+        # colorkey transparency is set manually here (not via tk's
+        # -transparentcolor) so the extended style change below does not reset it.
+        # tk's winfo_id() returns the inner drawing window, not the actual
+        # top-level frame the OS uses for hit-testing, so we resolve the real
+        # parent window and apply the styles there.
+        child_hwnd = self.root.winfo_id()
+        hwnd = ctypes.windll.user32.GetParent(child_hwnd) or child_hwnd
+
+        gwl_exstyle = -20
+        ws_ex_layered, ws_ex_transparent, ws_ex_noactivate = 0x80000, 0x20, 0x08000000
+        lwa_colorkey = 0x1
+        swp_flags = 0x0001 | 0x0002 | 0x0004 | 0x0020  # nomove, nosize, nozorder, framechanged
+
         style = ctypes.windll.user32.GetWindowLongW(hwnd, gwl_exstyle)
-        ctypes.windll.user32.SetWindowLongW(hwnd, gwl_exstyle, style | ws_ex_layered | ws_ex_transparent)
+        new_style = style | ws_ex_layered | ws_ex_transparent | ws_ex_noactivate
+        ctypes.windll.user32.SetWindowLongW(hwnd, gwl_exstyle, new_style)
+        ctypes.windll.user32.SetLayeredWindowAttributes(hwnd, 0x000000, 0, lwa_colorkey)
+        ctypes.windll.user32.SetWindowPos(hwnd, None, 0, 0, 0, 0, swp_flags)
 
-    def draw(self, res, enabled, fps):
-        self.canvas.delete("all")
+    def draw(self, res, enabled, fps, region_offset):
         color = "#00ff00" if enabled else "#ff0000"
         status = "BOT: ACTIVE (K to pause)" if enabled else "BOT: PAUSED (K to start)"
-        self.canvas.create_text(20, 20, text=status, fill=color, anchor="nw", font=("Consolas", 14, "bold"))
-        self.canvas.create_text(20, 45, text=f"{fps:.0f} fps", fill="yellow", anchor="nw", font=("Consolas", 12))
-        if res:
-            self._rect(res["track"], "#ff0000")
-            if res.get("zone"):
-                self._rect(res["zone"], "#00ff00")
-            if res.get("marker"):
-                self._rect(res["marker"], "#ffff00")
-        self.root.update_idletasks()
+        self.canvas.itemconfigure(self.status_id, text=status, fill=color)
+        self.canvas.itemconfigure(self.fps_id, text=f"{fps:.0f} fps")
+
+        res = res or {}
+        self._move_rect(self.track_id, res.get("track"), region_offset)
+        self._move_rect(self.zone_id, res.get("zone"), region_offset)
+        self._move_rect(self.marker_id, res.get("marker"), region_offset)
         self.root.update()
 
-    def _rect(self, box, color):
+    def _move_rect(self, item_id, box, region_offset):
+        if box is None:
+            self.canvas.itemconfigure(item_id, state="hidden")
+            return
+        ox, oy = region_offset
         x, y, w, h = box
-        self.canvas.create_rectangle(x, y, x + w, y + h, outline=color, width=2)
+        self.canvas.coords(item_id, x + ox, y + oy, x + w + ox, y + h + oy)
+        self.canvas.itemconfigure(item_id, state="normal")
 
     def close(self):
         self.root.destroy()
@@ -280,16 +351,23 @@ def run(debug):
         monitor = sct.monitors[1]
         scale = monitor["height"] / BASE_HEIGHT
         params = build_params(scale)
-        overlay = Overlay(monitor) if debug else None
+
+        region = build_search_region(monitor)
+        region_offset = (region["left"] - monitor["left"], region["top"] - monitor["top"])
+        region_size = (region["width"], region["height"])
+
+        overlay = Overlay(monitor, region_offset, region_size) if debug else None
 
         print(f"monitor {monitor['width']}x{monitor['height']}, scale {scale:.2f}")
+        print(f"scan region {region['width']}x{region['height']} (adjust SEARCH_*_FRAC to move/resize it)")
         print("k = start/pause, ctrl+c in console = quit")
 
         prev = time.perf_counter()
         fps = 0.0
         try:
             while True:
-                frame = np.array(sct.grab(monitor))[:, :, :3]
+                raw = sct.grab(region)
+                frame = cv2.cvtColor(np.array(raw), cv2.COLOR_BGRA2BGR)
                 res = analyze(frame, params)
 
                 if bot_enabled:
@@ -312,7 +390,7 @@ def run(debug):
                 prev = now
 
                 if overlay:
-                    overlay.draw(res, bot_enabled, fps)
+                    overlay.draw(res, bot_enabled, fps, region_offset)
         except KeyboardInterrupt:
             pass
         finally:
