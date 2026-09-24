@@ -37,7 +37,7 @@ STATE_LABELS = {
 
 TRANSPARENT_KEY = "#000000"  # transparent color key for click-through windows
 
-input_queue = Queue()
+input_action_queue = Queue()
 fishing_session = fishing.FishingSession()
 
 
@@ -49,16 +49,16 @@ def safe_click():
 
 
 # asynchronous input worker thread
-def input_worker():
+def input_command_worker():
     while True:
-        command = input_queue.get()
-        if command == "click":
+        input_command = input_action_queue.get()
+        if input_command == "click":
             safe_click()
-        elif command == "down":
+        elif input_command == "down":
             pydirectinput.mouseDown()
-        elif command == "up":
+        elif input_command == "up":
             pydirectinput.mouseUp()
-        elif command == "collect_sequence":
+        elif input_command == "collect_sequence":
             pydirectinput.mouseUp()
 
             print("[INPUT] Waiting for the catch animation...")
@@ -80,45 +80,49 @@ def input_worker():
             print("[INPUT] Ready. Waiting for the next bite...")
             fishing_session.reset()  # return to the waiting state
 
-        input_queue.task_done()
+        input_action_queue.task_done()
 
 
-threading.Thread(target=input_worker, daemon=True).start()
+threading.Thread(target=input_command_worker, daemon=True).start()
 
 
 # shared click-through window infrastructure for the overlay and status hud
-def _make_click_through_window(root, x, y, w, h, transparent=True):
+def _make_click_through_window(root_window, position_x, position_y, width, height, transparent=True):
     # create a borderless, topmost window that does not intercept mouse input
-    win = tk.Toplevel(root)
-    win.overrideredirect(True)          # remove the border and title bar
-    win.attributes("-topmost", True)    # keep the window above other windows
+    window = tk.Toplevel(root_window)
+    window.overrideredirect(True)          # remove the border and title bar
+    window.attributes("-topmost", True)    # keep the window above other windows
     if transparent:
-        win.configure(bg=TRANSPARENT_KEY)
-        win.attributes("-transparentcolor", TRANSPARENT_KEY)  # make the key color transparent
+        window.configure(bg=TRANSPARENT_KEY)
+        window.attributes("-transparentcolor", TRANSPARENT_KEY)  # make the key color transparent
     else:
-        win.configure(bg="black")
-    win.geometry(f"{w}x{h}+{x}+{y}")
-    win.update_idletasks()
+        window.configure(bg="black")
+    window.geometry(f"{width}x{height}+{position_x}+{position_y}")
+    window.update_idletasks()
 
     # add transparent and layered styles so mouse input passes through the window
-    hwnd = win32gui.GetParent(win.winfo_id())
-    ex_style = win32gui.GetWindowLong(hwnd, win32con.GWL_EXSTYLE)
+    window_handle = win32gui.GetParent(window.winfo_id())
+    extended_style = win32gui.GetWindowLong(window_handle, win32con.GWL_EXSTYLE)
     win32gui.SetWindowLong(
-        hwnd, win32con.GWL_EXSTYLE, ex_style | win32con.WS_EX_LAYERED | win32con.WS_EX_TRANSPARENT
+        window_handle,
+        win32con.GWL_EXSTYLE,
+        extended_style | win32con.WS_EX_LAYERED | win32con.WS_EX_TRANSPARENT,
     )
-    return win
+    return window
 
 
 class StatusHUD:
     # always-visible click-through bot status indicator
 
-    def __init__(self, root):
-        x, y = STATUS_OVERLAY_POS
-        self.x = x
-        self.y = y
-        self.background = _make_click_through_window(root, x, y, 1, 1, transparent=False)
+    def __init__(self, root_window):
+        position_x, position_y = STATUS_OVERLAY_POS
+        self.position_x = position_x
+        self.position_y = position_y
+        self.background = _make_click_through_window(
+            root_window, position_x, position_y, 1, 1, transparent=False
+        )
         self.background.attributes("-alpha", 0.5)
-        self.window = _make_click_through_window(root, x, y, 1, 1)
+        self.window = _make_click_through_window(root_window, position_x, position_y, 1, 1)
         self.label = tk.Label(
             self.window,
             text="",
@@ -139,7 +143,7 @@ class StatusHUD:
         self.label.update_idletasks()
         width = self.label.winfo_reqwidth()
         height = self.label.winfo_reqheight()
-        geometry = f"{width}x{height}+{self.x}+{self.y}"
+        geometry = f"{width}x{height}+{self.position_x}+{self.position_y}"
         self.background.geometry(geometry)
         self.window.geometry(geometry)
 
@@ -147,93 +151,125 @@ class StatusHUD:
 class DebugRectOverlay:
     # draw zone and marker boxes over the capture region in overlay debug mode
 
-    def __init__(self, root):
-        roi = fishing.CAPTURE_ROI
-        self.window = _make_click_through_window(root, roi["left"], roi["top"], roi["width"], roi["height"])
+    def __init__(self, root_window):
+        capture_region = fishing.CAPTURE_ROI
+        self.window = _make_click_through_window(
+            root_window,
+            capture_region["left"],
+            capture_region["top"],
+            capture_region["width"],
+            capture_region["height"],
+        )
         self.canvas = tk.Canvas(
             self.window,
-            width=roi["width"],
-            height=roi["height"],
+            width=capture_region["width"],
+            height=capture_region["height"],
             bg=TRANSPARENT_KEY,
             highlightthickness=0,
         )
         self.canvas.pack(fill="both", expand=True)
 
-    def update(self, res):
+    def update(self, detection_result):
         self.canvas.delete("all")
-        roi = fishing.CAPTURE_ROI
+        capture_region = fishing.CAPTURE_ROI
         self.canvas.create_rectangle(
             1,
             1,
-            roi["width"] - 2,
-            roi["height"] - 2,
+            capture_region["width"] - 2,
+            capture_region["height"] - 2,
             outline="#00FFFF",
             width=2,
             dash=(6, 4),
         )
-        if res is None:
+        if detection_result is None:
             return
-        if res.get("zone") is not None:
-            zx, zy, zw, zh = res["zone"]
-            self.canvas.create_rectangle(zx, zy, zx + zw, zy + zh, outline="#00FF00", width=2)
-        if res.get("marker") is not None:
-            mx, my, mw, mh = res["marker"]
-            self.canvas.create_rectangle(mx, my, mx + mw, my + mh, outline="#FFFF00", width=2)
+        if detection_result.get("zone") is not None:
+            zone_x, zone_y, zone_width, zone_height = detection_result["zone"]
+            self.canvas.create_rectangle(
+                zone_x,
+                zone_y,
+                zone_x + zone_width,
+                zone_y + zone_height,
+                outline="#00FF00",
+                width=2,
+            )
+        if detection_result.get("marker") is not None:
+            marker_x, marker_y, marker_width, marker_height = detection_result["marker"]
+            self.canvas.create_rectangle(
+                marker_x,
+                marker_y,
+                marker_x + marker_width,
+                marker_y + marker_height,
+                outline="#FFFF00",
+                width=2,
+            )
 
 
 # debug window mode using cv2.imshow with the captured frame
-def draw_analysis(bgr, res):
+def draw_debug_frame(frame_bgr, detection_result):
     # draw zone and marker boxes on a copy of the captured frame
-    out = bgr.copy()
-    if res is None:
-        return out
+    debug_frame = frame_bgr.copy()
+    if detection_result is None:
+        return debug_frame
 
-    if res.get("zone") is not None:
-        zx, zy, zw, zh = res["zone"]
-        cv2.rectangle(out, (zx, zy), (zx + zw, zy + zh), (0, 255, 0), 2)
-    if res.get("marker") is not None:
-        mx, my, mw, mh = res["marker"]
-        cv2.rectangle(out, (mx, my), (mx + mw, my + mh), (0, 255, 255), 2)
+    if detection_result.get("zone") is not None:
+        zone_x, zone_y, zone_width, zone_height = detection_result["zone"]
+        cv2.rectangle(
+            debug_frame,
+            (zone_x, zone_y),
+            (zone_x + zone_width, zone_y + zone_height),
+            (0, 255, 0),
+            2,
+        )
+    if detection_result.get("marker") is not None:
+        marker_x, marker_y, marker_width, marker_height = detection_result["marker"]
+        cv2.rectangle(
+            debug_frame,
+            (marker_x, marker_y),
+            (marker_x + marker_width, marker_y + marker_height),
+            (0, 255, 255),
+            2,
+        )
 
-    return out
+    return debug_frame
 
 
-def toggle_bot():
+def toggle_bot_enabled():
     # toggle the bot with the configured hotkey
     global AUTOCLICKER_ENABLED
     AUTOCLICKER_ENABLED = not AUTOCLICKER_ENABLED
     print(f"\n[BOT] Status: {AUTOCLICKER_ENABLED}")
     if AUTOCLICKER_ENABLED:
         fishing_session.reset()
-        input_queue.put("click")
+        input_action_queue.put("click")
 
 
 # main capture and processing loop
 def run_live(debug_mode):
     # debug_mode can be None, overlay, or window.
     stop_event = threading.Event()
-    keyboard.add_hotkey('k', toggle_bot)
+    keyboard.add_hotkey('k', toggle_bot_enabled)
     keyboard.add_hotkey('esc', stop_event.set)
 
-    root = tk.Tk()
-    root.withdraw()  # keep the root window hidden; it only acts as a container
+    root_window = tk.Tk()
+    root_window.withdraw()  # keep the root window hidden; it only acts as a container
 
-    status_hud = StatusHUD(root)
-    debug_overlay = DebugRectOverlay(root) if debug_mode == "overlay" else None
+    status_hud = StatusHUD(root_window)
+    debug_overlay = DebugRectOverlay(root_window) if debug_mode == "overlay" else None
 
-    with mss.mss() as sct:
+    with mss.mss() as screen_capture:
         print("Bot ready (state machine enabled). Press K to start or ESC to exit.")
-        prev = time.perf_counter()
+        previous_time = time.perf_counter()
         fps = 0.0
         window_positioned = False
 
         while not stop_event.is_set():
-            frame = np.array(sct.grab(fishing.CAPTURE_ROI))[:, :, :3]
-            res = fishing.analyze_static(frame)
+            captured_frame = np.array(screen_capture.grab(fishing.CAPTURE_ROI))[:, :, :3]
+            detection_result = fishing.analyze_frame(captured_frame)
 
-            now = time.perf_counter()
-            fps = 0.9 * fps + 0.1 * (1.0 / max(now - prev, 1e-6))
-            prev = now
+            current_time = time.perf_counter()
+            fps = 0.9 * fps + 0.1 * (1.0 / max(current_time - previous_time, 1e-6))
+            previous_time = current_time
 
             # the status hud is always enabled independently of debug_mode
             bot_status = "FISHING BOT ENABLED" if AUTOCLICKER_ENABLED else "FISHING BOT DISABLED"
@@ -244,31 +280,31 @@ def run_live(debug_mode):
             status_hud.update(status_text)
 
             if AUTOCLICKER_ENABLED:
-                actions = fishing_session.update(res, now)
+                actions = fishing_session.update(detection_result, current_time)
                 for action in actions:
-                    input_queue.put(action)
+                    input_action_queue.put(action)
             else:
                 if fishing_session.is_pressing:
-                    input_queue.put("up")
+                    input_action_queue.put("up")
                     fishing_session.is_pressing = False
 
             if debug_mode == "window":
-                out = draw_analysis(frame, res)
-                cv2.imshow("track detector", out)
+                debug_frame = draw_debug_frame(captured_frame, detection_result)
+                cv2.imshow("track detector", debug_frame)
                 if not window_positioned:
-                    window_x = max(0, root.winfo_screenwidth() - out.shape[1] - 40)
+                    window_x = max(0, root_window.winfo_screenwidth() - debug_frame.shape[1] - 40)
                     cv2.moveWindow("track detector", window_x, 40)
                     window_positioned = True
                 if cv2.waitKey(1) & 0xFF in (27, ord('q')):
                     stop_event.set()
             elif debug_mode == "overlay":
-                debug_overlay.update(res)
+                debug_overlay.update(detection_result)
 
-            root.update()
+            root_window.update()
 
     if debug_mode == "window":
         cv2.destroyAllWindows()
-    root.destroy()
+    root_window.destroy()
 
 
 def parse_args():
@@ -289,9 +325,9 @@ def parse_args():
 
 
 if __name__ == "__main__":
-    args = parse_args()
+    command_line_args = parse_args()
     try:
-        run_live(args.debug)
-    except Exception as e:
-        print(f"\nRuntime error: {e}")
+        run_live(command_line_args.debug)
+    except Exception as error:
+        print(f"\nRuntime error: {error}")
         input()
