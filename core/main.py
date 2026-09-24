@@ -29,9 +29,15 @@ AUTOCLICKER_ENABLED = False  # по умолчанию бот на паузе
 
 # --- НАСТРОЙКИ HUD-СТАТУСА (всегда включен, не зависит от debug) ---
 STATUS_OVERLAY_POS = (20, 20)     # позиция окна статуса на экране (x, y)
-STATUS_OVERLAY_SIZE = (280, 50)   # размер окна статуса (ширина, высота)
+STATUS_OVERLAY_PADDING = (10, 8)  # внутренние отступы текста (x, y)
 
-TRANSPARENT_KEY = "#FF00FF"  # магический цвет-ключ для прозрачности click-through окон
+STATE_LABELS = {
+    fishing.STATE_WAITING: "WAITING FOR BITE",
+    fishing.STATE_MINIGAME: "CATCHING FISH",
+    fishing.STATE_COLLECTING: "COLLECTING CATCH",
+}
+
+TRANSPARENT_KEY = "#000000"  # черный цвет-ключ для прозрачности click-through окон
 
 input_queue = Queue()
 fishing_session = fishing.FishingSession()
@@ -83,14 +89,17 @@ threading.Thread(target=input_worker, daemon=True).start()
 
 
 # --- CLICK-THROUGH ОКНА (общая инфраструктура для overlay и hud) ---
-def _make_click_through_window(root, x, y, w, h):
+def _make_click_through_window(root, x, y, w, h, transparent=True):
     """создает окно без рамки, всегда поверх остальных, прозрачное и не перехватывающее клики.
     клики/нажатия проходят сквозь него насквозь в игру, окно только рисует поверх экрана."""
     win = tk.Toplevel(root)
     win.overrideredirect(True)          # без рамки/заголовка
     win.attributes("-topmost", True)    # всегда поверх
-    win.configure(bg=TRANSPARENT_KEY)
-    win.attributes("-transparentcolor", TRANSPARENT_KEY)  # этот цвет становится полностью прозрачным
+    if transparent:
+        win.configure(bg=TRANSPARENT_KEY)
+        win.attributes("-transparentcolor", TRANSPARENT_KEY)  # этот цвет становится полностью прозрачным
+    else:
+        win.configure(bg="black")
     win.geometry(f"{w}x{h}+{x}+{y}")
     win.update_idletasks()
 
@@ -110,21 +119,34 @@ class StatusHUD:
 
     def __init__(self, root):
         x, y = STATUS_OVERLAY_POS
-        w, h = STATUS_OVERLAY_SIZE
-        self.window = _make_click_through_window(root, x, y, w, h)
+        self.x = x
+        self.y = y
+        self.background = _make_click_through_window(root, x, y, 1, 1, transparent=False)
+        self.background.attributes("-alpha", 0.5)
+        self.window = _make_click_through_window(root, x, y, 1, 1)
         self.label = tk.Label(
             self.window,
             text="",
-            fg="#00FF00",
+            fg="#FFFFFF",
             bg=TRANSPARENT_KEY,
             font=("Consolas", 11, "bold"),
             justify="left",
             anchor="w",
+            padx=STATUS_OVERLAY_PADDING[0],
+            pady=STATUS_OVERLAY_PADDING[1],
+            borderwidth=0,
+            highlightthickness=0,
         )
         self.label.pack(fill="both", expand=True)
 
-    def update(self, text, color="#00FF00"):
-        self.label.config(text=text, fg=color)
+    def update(self, text):
+        self.label.config(text=text)
+        self.label.update_idletasks()
+        width = self.label.winfo_reqwidth()
+        height = self.label.winfo_reqheight()
+        geometry = f"{width}x{height}+{self.x}+{self.y}"
+        self.background.geometry(geometry)
+        self.window.geometry(geometry)
 
 
 class DebugRectOverlay:
@@ -225,11 +247,12 @@ def run_live(debug_mode):
             prev = now
 
             # --- статус-hud: всегда включенная фича, не зависит от debug_mode ---
-            status_text = f"STATUS: {'ACTIVE' if AUTOCLICKER_ENABLED else 'PAUSED'} [{fishing_session.current_state}]"
+            bot_status = "FISHING BOT ENABLED" if AUTOCLICKER_ENABLED else "FISHING BOT DISABLED"
+            current_action = STATE_LABELS.get(fishing_session.current_state, "IDLE")
+            status_text = f"{bot_status}\n{current_action}"
             if debug_mode is not None:
                 status_text += f"\n{fps:.0f} FPS"
-            status_color = "#00FF00" if AUTOCLICKER_ENABLED else "#FF3333"
-            status_hud.update(status_text, status_color)
+            status_hud.update(status_text)
 
             if AUTOCLICKER_ENABLED:
                 actions = fishing_session.update(res, now)
