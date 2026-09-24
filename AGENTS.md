@@ -15,6 +15,14 @@
 - Remove redundant comments and decorative separator characters; comment only when behavior is not self-explanatory.
 - Use brief lowercase English comments for important functions, variables, and non-obvious logic.
 
+### Naming
+- Use descriptive `snake_case` names for functions, variables, parameters, and local data.
+- Avoid unclear abbreviations such as `res`, `out`, `cnts`, `c`, `m_y`, or `z_bot`; prefer names that describe the value's role.
+- Name image data by color space or purpose, such as `frame_bgr`, `hsv_frame`, and `debug_frame`.
+- Name detection dictionaries and geometry values explicitly, such as `detection_result`, `marker_center_y`, and `zone_bottom`.
+- Name queues, workers, and callbacks after their responsibility, such as `input_action_queue` and `input_command_worker`.
+- Keep established state constants and action strings unchanged unless their external contract changes.
+
 ## Working style
 - Favor explicit helper functions and readable variable names over clever shortcuts.
 - Keep the main capture loop responsive and non-blocking. Avoid introducing long sleeps or heavy processing in the live frame path.
