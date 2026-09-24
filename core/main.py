@@ -1,8 +1,6 @@
-"""main entry point: input execution, capture/processing loop, debug visualization and top-level settings.
-the fishing algorithm, cv detection and webhook reporting live in fishing.py.
-
-зависимости помимо requirements.txt: pywin32 (win32gui, win32con) - нужен для click-through
-overlay-окон (обводка и статус-hud поверх монитора, не перехватывающие клики мыши)."""
+# main entry point for input execution, capture, processing, debug visualization,
+# and top-level settings. fishing.py contains detection, state logic, and webhook reporting.
+# pywin32 provides click-through overlay support through win32gui and win32con.
 
 import argparse
 import time
@@ -20,16 +18,16 @@ import win32con
 
 import fishing
 
-# --- НАСТРОЙКИ СТАБИЛЬНОСТИ ИНПУТА / input stability settings ---
+# input stability settings
 pydirectinput.PAUSE = 0.001
 pydirectinput.FAILSAFE = False
 
-# --- ГЛАВНЫЕ НАСТРОЙКИ БОТА / main bot settings ---
-AUTOCLICKER_ENABLED = False  # по умолчанию бот на паузе
+# main bot settings
+AUTOCLICKER_ENABLED = False  # the bot starts paused
 
-# --- НАСТРОЙКИ HUD-СТАТУСА (всегда включен, не зависит от debug) ---
-STATUS_OVERLAY_POS = (20, 20)     # позиция окна статуса на экране (x, y)
-STATUS_OVERLAY_PADDING = (10, 8)  # внутренние отступы текста (x, y)
+# status hud settings, always enabled independently of debug mode
+STATUS_OVERLAY_POS = (20, 20)     # status window position on screen (x, y)
+STATUS_OVERLAY_PADDING = (10, 8)  # text padding (x, y)
 
 STATE_LABELS = {
     fishing.STATE_WAITING: "WAITING FOR BITE",
@@ -37,20 +35,20 @@ STATE_LABELS = {
     fishing.STATE_COLLECTING: "COLLECTING CATCH",
 }
 
-TRANSPARENT_KEY = "#000000"  # черный цвет-ключ для прозрачности click-through окон
+TRANSPARENT_KEY = "#000000"  # transparent color key for click-through windows
 
 input_queue = Queue()
 fishing_session = fishing.FishingSession()
 
 
 def safe_click():
-    """надежный клик для Roblox с задержкой нажатия"""
+    # click reliably with a short press duration
     pydirectinput.mouseDown()
     time.sleep(0.08)
     pydirectinput.mouseUp()
 
 
-# --- АСИНХРОННЫЙ ПОТОК ВВОДА / async input worker thread ---
+# asynchronous input worker thread
 def input_worker():
     while True:
         command = input_queue.get()
@@ -63,24 +61,24 @@ def input_worker():
         elif command == "collect_sequence":
             pydirectinput.mouseUp()
 
-            print("[ПОТОК ВВОДА] Ждем 2 секунды анимации поимки...")
+            print("[INPUT] Waiting for the catch animation...")
             time.sleep(3.0)
 
-            print("[ПОТОК ВВОДА] Зажимаем T для сбора рыбы...")
+            print("[INPUT] Holding T to collect the catch...")
             pydirectinput.keyDown('t')
             time.sleep(fishing.HOLD_T_DURATION)
             pydirectinput.keyUp('t')
-            print("[ПОТОК ВВОДА] Улов собран.")
+            print("[INPUT] Catch collected.")
 
             fishing.send_catch_webhook_data()
 
             time.sleep(1.0)
-            print("[ПОТОК ВВОДА] Забрасываем удочку...")
+            print("[INPUT] Casting the rod...")
             safe_click()
-            time.sleep(1.5)  # задержка на анимацию броска
+            time.sleep(1.5)  # wait for the casting animation
 
-            print("[ПОТОК ВВОДА] Готово! Переходим в режим ожидания поклевки...")
-            fishing_session.reset()  # сбрасываем состояние на ожидание
+            print("[INPUT] Ready. Waiting for the next bite...")
+            fishing_session.reset()  # return to the waiting state
 
         input_queue.task_done()
 
@@ -88,23 +86,21 @@ def input_worker():
 threading.Thread(target=input_worker, daemon=True).start()
 
 
-# --- CLICK-THROUGH ОКНА (общая инфраструктура для overlay и hud) ---
+# shared click-through window infrastructure for the overlay and status hud
 def _make_click_through_window(root, x, y, w, h, transparent=True):
-    """создает окно без рамки, всегда поверх остальных, прозрачное и не перехватывающее клики.
-    клики/нажатия проходят сквозь него насквозь в игру, окно только рисует поверх экрана."""
+    # create a borderless, topmost window that does not intercept mouse input
     win = tk.Toplevel(root)
-    win.overrideredirect(True)          # без рамки/заголовка
-    win.attributes("-topmost", True)    # всегда поверх
+    win.overrideredirect(True)          # remove the border and title bar
+    win.attributes("-topmost", True)    # keep the window above other windows
     if transparent:
         win.configure(bg=TRANSPARENT_KEY)
-        win.attributes("-transparentcolor", TRANSPARENT_KEY)  # этот цвет становится полностью прозрачным
+        win.attributes("-transparentcolor", TRANSPARENT_KEY)  # make the key color transparent
     else:
         win.configure(bg="black")
     win.geometry(f"{w}x{h}+{x}+{y}")
     win.update_idletasks()
 
-    # добавляем WS_EX_TRANSPARENT поверх layered-стиля, который уже выставил tkinter
-    # для -transparentcolor - это и делает окно click-through (мышь проходит сквозь него)
+    # add transparent and layered styles so mouse input passes through the window
     hwnd = win32gui.GetParent(win.winfo_id())
     ex_style = win32gui.GetWindowLong(hwnd, win32con.GWL_EXSTYLE)
     win32gui.SetWindowLong(
@@ -114,8 +110,7 @@ def _make_click_through_window(root, x, y, w, h, transparent=True):
 
 
 class StatusHUD:
-    """всегда включенный click-through индикатор статуса бота. НЕ зависит от режима debug -
-    это отдельная, постоянно видимая фича, а не часть отладочной визуализации."""
+    # always-visible click-through bot status indicator
 
     def __init__(self, root):
         x, y = STATUS_OVERLAY_POS
@@ -150,8 +145,7 @@ class StatusHUD:
 
 
 class DebugRectOverlay:
-    """debug-режим overlay: рисует рамки зоны/маркера click-through поверх реальной области
-    экрана (там же, где CAPTURE_ROI). Только рамки, без текста - текст живет в StatusHUD."""
+    # draw zone and marker boxes over the capture region in overlay debug mode
 
     def __init__(self, root):
         roi = fishing.CAPTURE_ROI
@@ -187,10 +181,9 @@ class DebugRectOverlay:
             self.canvas.create_rectangle(mx, my, mx + mw, my + mh, outline="#FFFF00", width=2)
 
 
-# --- DEBUG: РЕЖИМ ОТДЕЛЬНОГО ОКНА (существующий режим, cv2.imshow с захваченным кадром) ---
+# debug window mode using cv2.imshow with the captured frame
 def draw_analysis(bgr, res):
-    """рисует рамки зоны/маркера на копии захваченного кадра для debug-режима window.
-    статус-текст сюда не добавляется - он всегда отдельно показывается через StatusHUD."""
+    # draw zone and marker boxes on a copy of the captured frame
     out = bgr.copy()
     if res is None:
         return out
@@ -206,34 +199,30 @@ def draw_analysis(bgr, res):
 
 
 def toggle_bot():
-    """включает/выключает бота по горячей клавише"""
+    # toggle the bot with the configured hotkey
     global AUTOCLICKER_ENABLED
     AUTOCLICKER_ENABLED = not AUTOCLICKER_ENABLED
-    print(f"\n[БОТ] СТАТУС: {AUTOCLICKER_ENABLED}")
+    print(f"\n[BOT] Status: {AUTOCLICKER_ENABLED}")
     if AUTOCLICKER_ENABLED:
         fishing_session.reset()
         input_queue.put("click")
 
 
-# --- ГЛАВНЫЙ ПОТОК / main capture + processing loop ---
+# main capture and processing loop
 def run_live(debug_mode):
-    """
-    debug_mode: None (без визуализации, только всегда включенный StatusHUD),
-                "overlay" (click-through рамки прямо поверх монитора, дефолт для --debug),
-                "window" (старый отдельный cv2-window с захваченным кадром).
-    """
+    # debug_mode can be None, overlay, or window.
     stop_event = threading.Event()
     keyboard.add_hotkey('k', toggle_bot)
     keyboard.add_hotkey('esc', stop_event.set)
 
     root = tk.Tk()
-    root.withdraw()  # корневое tk-окно не показываем, оно нужно только как контейнер
+    root.withdraw()  # keep the root window hidden; it only acts as a container
 
     status_hud = StatusHUD(root)
     debug_overlay = DebugRectOverlay(root) if debug_mode == "overlay" else None
 
     with mss.mss() as sct:
-        print("Бот готов (система состояний включена). Нажмите K для старта, ESC для выхода.")
+        print("Bot ready (state machine enabled). Press K to start or ESC to exit.")
         prev = time.perf_counter()
         fps = 0.0
         window_positioned = False
@@ -246,7 +235,7 @@ def run_live(debug_mode):
             fps = 0.9 * fps + 0.1 * (1.0 / max(now - prev, 1e-6))
             prev = now
 
-            # --- статус-hud: всегда включенная фича, не зависит от debug_mode ---
+            # the status hud is always enabled independently of debug_mode
             bot_status = "FISHING BOT ENABLED" if AUTOCLICKER_ENABLED else "FISHING BOT DISABLED"
             current_action = STATE_LABELS.get(fishing_session.current_state, "IDLE")
             status_text = f"{bot_status}\n{current_action}"
@@ -291,9 +280,9 @@ def parse_args():
         default=None,
         choices=["overlay", "window"],
         help=(
-            "режим debug-визуализации. без флага - выключено (виден только StatusHUD). "
-            "'--debug' или '--debug overlay' - click-through рамки поверх реального экрана. "
-            "'--debug window' - отдельное окно cv2 с захваченным кадром (старый режим)."
+            "debug visualization mode. without the flag, only StatusHUD is shown. "
+            "'--debug' or '--debug overlay' shows click-through boxes over the screen. "
+            "'--debug window' opens a separate cv2 window with the captured frame."
         ),
     )
     return parser.parse_args()
@@ -304,5 +293,5 @@ if __name__ == "__main__":
     try:
         run_live(args.debug)
     except Exception as e:
-        print(f"\nОшибка при работе: {e}")
+        print(f"\nRuntime error: {e}")
         input()

@@ -1,28 +1,27 @@
-"""fishing algorithm: settings, cv detection and state machine for the roblox fishing minigame.
-this module does not touch mouse/keyboard directly - it only decides what should happen;
-main.py is responsible for actually executing input actions and for capture/overlay/debug."""
+# fishing settings, cv detection, and state machine for the roblox minigame
+# this module only decides which actions should happen; main.py executes them
 
 import cv2
 import numpy as np
 
-# --- НАСТРОЙКИ ИГРЫ / game settings ---
-HOLD_T_DURATION = 8.0          # сколько секунд удерживать Т для сбора улова
-DISAPPEAR_TIMEOUT = 0.35       # задержка проверки конца мини-игры (в секундах)
+# game settings
+HOLD_T_DURATION = 8.0          # seconds to hold t while collecting the catch
+DISAPPEAR_TIMEOUT = 0.35       # delay before confirming the minigame ended
 
-# --- СОСТОЯНИЯ БОТА / bot states ---
-STATE_WAITING = "WAITING"        # ожидание появления шкалы (клев)
-STATE_MINIGAME = "MINIGAME"      # процесс ловли
-STATE_COLLECTING = "COLLECTING"  # сбор улова и перезаброс
+# bot states
+STATE_WAITING = "WAITING"        # wait for the fishing bar to appear
+STATE_MINIGAME = "MINIGAME"      # active fishing minigame
+STATE_COLLECTING = "COLLECTING"  # collect the catch and recast
 
-# --- ТОЧНАЯ ОБЛАСТЬ ЗАХВАТА ШКАЛЫ (для 1920x1080) / capture roi ---
+# capture region for the fishing bar on a 1920x1080 display
 CAPTURE_ROI = {
-    "top": 280,      # отступ сверху
-    "left": 1380,    # отступ слева (правая часть экрана)
-    "width": 180,    # ширина захвата
-    "height": 480    # высота захвата
+    "top": 280,      # top offset
+    "left": 1380,    # left offset on the right side of the screen
+    "width": 180,    # capture width
+    "height": 480    # capture height
 }
 
-# цветовые диапазоны HSV (желто-зеленая зона и белый маркер) / hsv color ranges
+# hsv color ranges for the yellow-green zone and white marker
 ZONE_HSV_LO, ZONE_HSV_HI = (15, 40, 40), (85, 255, 255)
 MARKER_HSV_LO, MARKER_HSV_HI = (0, 0, 150), (180, 60, 255)
 
@@ -30,9 +29,9 @@ ZONE_MIN_AREA = 40
 MARKER_MIN_AREA = 80
 
 
-# --- ДЕТЕКЦИЯ ПО ЦВЕТУ (HSV) / color detection ---
+# hsv color detection
 def _largest_contour_box(mask, min_area):
-    """finds the bounding box of the largest contour above min_area, or none"""
+    # find the largest contour above min_area and return its bounding box
     cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     if not cnts:
         return None
@@ -41,21 +40,21 @@ def _largest_contour_box(mask, min_area):
 
 
 def find_zone(hsv_img):
-    """detects the yellow-green catch zone"""
+    # detect the yellow-green catch zone
     mask = cv2.inRange(hsv_img, ZONE_HSV_LO, ZONE_HSV_HI)
     mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8))
     return _largest_contour_box(mask, ZONE_MIN_AREA)
 
 
 def find_marker(hsv_img):
-    """detects the white tracking marker"""
+    # detect the white tracking marker
     mask = cv2.inRange(hsv_img, MARKER_HSV_LO, MARKER_HSV_HI)
     mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
     return _largest_contour_box(mask, MARKER_MIN_AREA)
 
 
 def analyze_static(bgr):
-    """runs cv detection on a single frame, returns zone/marker geometry or none"""
+    # detect zone and marker geometry in a single frame
     hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
     zone = find_zone(hsv)
     marker = find_marker(hsv)
@@ -72,20 +71,15 @@ def analyze_static(bgr):
     return res
 
 
-# --- ВЕБХУК / webhook stub ---
+# webhook stub
 def send_catch_webhook_data(catch_info=None):
-    """placeholder for reporting a completed catch.
-    real implementation will move into webhook.py once that module is added -
-    for now this is intentionally a no-op so the call site in main.py already exists."""
-    # todo: forward catch_info to webhook.py when it's introduced
+    # keep this as a no-op until webhook.py is introduced
     pass
 
 
-# --- АЛГОРИТМ / state machine ---
+# state machine
 class FishingSession:
-    """holds the fishing state machine and decides what input actions are needed
-    on each frame. it never calls pydirectinput/keyboard itself - main.py executes
-    the action strings this class returns through its input queue."""
+    # decide which input actions are needed for each frame
 
     def __init__(self):
         self.current_state = STATE_WAITING
@@ -93,31 +87,25 @@ class FishingSession:
         self.last_seen_time = 0.0
 
     def reset(self):
-        """resets the session back to waiting for a new bite"""
+        # return to the waiting state for a new bite
         self.current_state = STATE_WAITING
         self.is_pressing = False
         self.last_seen_time = 0.0
 
     def update(self, res, now):
-        """
-        advances the state machine by one frame.
-        res: output of analyze_static() for the current frame (or none)
-        now: time.perf_counter() timestamp for this frame
-        returns a list of action strings for the input queue, e.g.
-        ["down"], ["up"], ["collect_sequence"], or [] if nothing to do.
-        """
+        # advance the state machine by one frame and return input actions
         actions = []
         has_scale = (res is not None) and ("zone_bottom" in res or "marker_center_y" in res)
 
         if self.current_state == STATE_WAITING:
-            # в режиме ожидания мы только ищем шкалу. ложные пропажи игнорируются!
+            # only look for the fishing bar while waiting
             if has_scale:
-                print("[БОТ] Шкала обнаружена! Начинаем ловлю...")
+                print("[BOT] Fishing bar detected. Starting the minigame...")
                 self.current_state = STATE_MINIGAME
                 self.last_seen_time = now
 
         elif self.current_state == STATE_MINIGAME:
-            # в режиме мини-игры держим маркер в зоне и следим за пропажей шкалы
+            # keep the marker in the zone and watch for the bar to disappear
             if has_scale:
                 self.last_seen_time = now
 
@@ -134,19 +122,19 @@ class FishingSession:
                             actions.append("up")
                             self.is_pressing = False
             else:
-                # шкала пропала во время игры
+                # the fishing bar disappeared during the minigame
                 if self.is_pressing:
                     actions.append("up")
                     self.is_pressing = False
 
-                # если шкала отсутствует дольше DISAPPEAR_TIMEOUT, переходим к сбору
+                # collect the catch after the bar is absent for long enough
                 if (now - self.last_seen_time) >= DISAPPEAR_TIMEOUT:
-                    print(f"[БОТ] Шкала пропала более чем на {DISAPPEAR_TIMEOUT}s. Мини-игра завершена.")
+                    print(f"[BOT] Fishing bar missing for more than {DISAPPEAR_TIMEOUT}s. Minigame complete.")
                     self.current_state = STATE_COLLECTING
                     actions.append("collect_sequence")
 
         elif self.current_state == STATE_COLLECTING:
-            # пока идет сбор улова, ничего с кнопками мыши не делаем
+            # do not issue mouse actions while collecting the catch
             if self.is_pressing:
                 actions.append("up")
                 self.is_pressing = False
