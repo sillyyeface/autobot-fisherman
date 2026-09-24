@@ -145,6 +145,16 @@ class DebugRectOverlay:
 
     def update(self, res):
         self.canvas.delete("all")
+        roi = fishing.CAPTURE_ROI
+        self.canvas.create_rectangle(
+            1,
+            1,
+            roi["width"] - 2,
+            roi["height"] - 2,
+            outline="#00FFFF",
+            width=2,
+            dash=(6, 4),
+        )
         if res is None:
             return
         if res.get("zone") is not None:
