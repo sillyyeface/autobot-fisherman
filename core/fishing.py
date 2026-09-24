@@ -77,7 +77,7 @@ def analyze_frame(frame_bgr):
 
 # webhook stub
 def send_catch_webhook_data(catch_data=None):
-    # keep this as a no-op until webhook.py is introduced
+    print("[WEBHOOK] Catch data:", catch_data)
     pass
 
 
