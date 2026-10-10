@@ -2,5 +2,5 @@ opencv-python
 numpy
 pydirectinput
 keyboard
-mss
+mss>=10.2
 pywin32
