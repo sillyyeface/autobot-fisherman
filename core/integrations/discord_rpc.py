@@ -2,6 +2,7 @@
 # handlers only store the latest state; one worker thread pushes it, because discord accepts a presence update
 # only every 15 s and the discord client may be closed or restarted at any time
 
+import asyncio
 import threading
 import time
 
@@ -37,8 +38,19 @@ def build_presence_fields():
     return presence_fields
 
 
+def report_error(action, error, last_error):
+    # print each distinct error once so a closed discord client does not flood the console
+    error_text = f"{action} failed: {error!r}"
+    if error_text != last_error:
+        print(f"[RPC] {error_text}")
+    return error_text
+
+
 def run_presence_worker():
+    # pypresence needs an event loop owned by this thread
+    asyncio.set_event_loop(asyncio.new_event_loop())
     presence_client = None
+    last_error = None
     last_update_time = 0.0
     while True:
         if presence_client is None:
@@ -46,8 +58,9 @@ def run_presence_worker():
                 presence_client = Presence(settings.DISCORD_RPC_CLIENT_ID)
                 presence_client.connect()
                 state_changed.set()
-            except Exception:
+            except Exception as error:
                 presence_client = None
+                last_error = report_error("connect", error, last_error)
                 time.sleep(RECONNECT_INTERVAL)
                 continue
         state_changed.wait()
@@ -59,9 +72,10 @@ def run_presence_worker():
         try:
             presence_client.update(**build_presence_fields())
             last_update_time = time.monotonic()
-        except Exception:
+        except Exception as error:
             # the discord client closed: reconnect and send the current state again
             presence_client = None
+            last_error = report_error("update", error, last_error)
 
 
 def on_bot_started():
