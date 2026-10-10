@@ -1,11 +1,17 @@
 ## Project overview
 - This repository is a Windows-only desktop automation script for the Roblox Slayers2 fishing minigame.
-- `core/main.py` owns screen capture, input execution, region selection, overlays, the status HUD, and the live loop.
-- `core/fishing.py` owns HSV detection, bar tracking, the fishing state machine, and the webhook stub.
+- `core/main.py` owns the command line, hotkeys, and the live loop that wires the modules together.
+- `core/settings.py` holds every user-tunable constant; keep new tunables there, keep internal constants in their modules.
+- `core/vision.py` owns HSV detection, `DetectionScale`, and `BarTracker`.
+- `core/fishing.py` owns the fishing state machine and marker control.
+- `core/input_control.py` owns the input worker, the collect sequence, and cancellation via action generations.
+- `core/region.py` owns search region math, `config.json`, and the selection screen.
+- `core/overlays.py` owns click-through windows, the status HUD, and both debug views.
+- `core/events.py` is a non-blocking event hub; `core/integrations/` modules subscribe to it and are enabled in `settings.py`.
 - `requirements.txt` lists the runtime dependencies: OpenCV, NumPy, pydirectinput, keyboard, mss, and pywin32.
-- The bot starts paused, uses `K` to toggle fishing, `L` to select the search region, and `ESC` to exit.
+- The bot starts stopped. `K` starts or stops the run (stop cancels input and resets the timer and phase), `L` selects the search region, `ESC` exits; keys are configurable in `settings.py`.
 - Debug modes: `main.py debug [--overlay]` for click-through boxes and `main.py debug --window` for a cv2 preview window.
-- The process is DPI aware; all coordinates are physical pixels. Pixel constants in `fishing.py` are 1080p reference values scaled by `DetectionScale`.
+- The process is DPI aware; all coordinates are physical pixels. Pixel constants in `vision.py` are 1080p reference values scaled by `DetectionScale`.
 - The search region is stored in the git-ignored `config.json` as monitor fractions; only the primary monitor is supported.
 - The marker is searched only inside the bar column derived from the zone; `BarTracker` keeps that column for `BAR_FORGET_TIMEOUT` when the zone flickers.
 - `FishingSession.should_press` holds while the predicted marker is below the predicted zone center; `PREDICTION_TIME` is the main tuning knob and should stay validated against real gameplay.
