@@ -9,6 +9,10 @@ EVENT_BOT_STARTED = "bot_started"          # the run started, no data
 EVENT_BOT_STOPPED = "bot_stopped"          # the run stopped, run_time in seconds
 EVENT_STATUS_CHANGED = "status_changed"    # status label shown in the hud
 EVENT_CATCH_COLLECTED = "catch_collected"  # a catch was collected, catch_count in this run
+# the catch notification was read: catch_name, catch_count (the x1 amount), catch_number in this run,
+# snapshot_path of the saved notification image or None
+EVENT_CATCH_CONFIRMED = "catch_confirmed"
+EVENT_CATCH_MISSED = "catch_missed"        # no catch notification after a minigame, no data
 
 _subscribers = defaultdict(list)
 _event_queue = Queue()

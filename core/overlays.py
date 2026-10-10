@@ -17,6 +17,7 @@ DEBUG_COLOR_SEARCH = "#FF6000"  # orange
 DEBUG_COLOR_BAR = "#C060FF"     # violet
 DEBUG_COLOR_ZONE = "#FF1A1A"    # red
 DEBUG_COLOR_MARKER = "#FF40C0"  # pink
+DEBUG_COLOR_NOTIFICATION = "#00C8FF"  # cyan
 DEBUG_LABEL_PLATE = "#101010"   # near-black label plate, pure black is the transparent key
 
 # debug drawing sizes in 1080p pixels, scaled by the screen height
@@ -26,6 +27,7 @@ DEBUG_LABEL_GAP = 4
 DEBUG_OVERLAY_MARGIN = (90, 24)  # extra room around the search region for labels (x, y)
 
 DEBUG_WINDOW_TITLE = "fisherman vision"
+DEBUG_NOTIFICATION_WINDOW_TITLE = "fisherman notification"
 
 WDA_EXCLUDEFROMCAPTURE = 0x11  # windows 10 2004+
 
@@ -118,13 +120,18 @@ DEBUG_BOX_STYLES = {
     "bar": (DEBUG_COLOR_BAR, "BAR", "left_top"),
     "zone": (DEBUG_COLOR_ZONE, "ZONE", "right"),
     "marker": (DEBUG_COLOR_MARKER, "MARKER", "left"),
+    "notification": (DEBUG_COLOR_NOTIFICATION, "NOTIFY", "above"),
 }
+# boxes that outline a whole captured region, drawn dashed
+REGION_BOX_NAMES = ("search", "notification")
 
 
 class DebugOverlay:
-    # click-through labeled boxes over the screen: search region, bar, zone, and marker
+    # click-through labeled boxes over one captured region: the search region with the bar, zone, and marker,
+    # or the notification region
 
-    def __init__(self, root_window, search_region, screen_scale):
+    def __init__(self, root_window, screen_region, screen_scale, region_box_name="search"):
+        self.region_box_name = region_box_name
         self.margin_x = round(DEBUG_OVERLAY_MARGIN[0] * screen_scale)
         self.margin_y = round(DEBUG_OVERLAY_MARGIN[1] * screen_scale)
         self.label_gap = max(2, round(DEBUG_LABEL_GAP * screen_scale))
@@ -140,21 +147,30 @@ class DebugOverlay:
             self.canvas_items[box_name] = (
                 self.canvas.create_rectangle(
                     0, 0, 0, 0, outline=color, width=line_width,
-                    dash=(6, 4) if box_name == "search" else None, state="hidden",
+                    dash=(6, 4) if box_name in REGION_BOX_NAMES else None, state="hidden",
                 ),
                 self.canvas.create_rectangle(0, 0, 0, 0, fill=DEBUG_LABEL_PLATE, outline="", state="hidden"),
                 self.canvas.create_text(0, 0, text=label_text, fill=color, font=label_font, state="hidden"),
             )
         self.placed_boxes = {}
-        self.move_to(search_region)
+        self.label_texts = {}
+        self.move_to(screen_region)
 
-    def move_to(self, search_region):
-        width, height = search_region["width"], search_region["height"]
+    def move_to(self, screen_region):
+        width, height = screen_region["width"], screen_region["height"]
         window_width, window_height = width + 2 * self.margin_x, height + 2 * self.margin_y
-        window_left, window_top = search_region["left"] - self.margin_x, search_region["top"] - self.margin_y
+        window_left, window_top = screen_region["left"] - self.margin_x, screen_region["top"] - self.margin_y
         self.window.geometry(f"{window_width}x{window_height}+{window_left}+{window_top}")
         self.canvas.config(width=window_width, height=window_height)
-        self._place_box("search", (0, 0, width, height))
+        self._place_box(self.region_box_name, (0, 0, width, height))
+
+    def set_label(self, box_name, label_text):
+        # change a label text, then place the box again so its plate fits the new text
+        if self.label_texts.get(box_name) == label_text:
+            return
+        self.label_texts[box_name] = label_text
+        self.canvas.itemconfigure(self.canvas_items[box_name][2], text=label_text)
+        self._place_box(box_name, self.placed_boxes.pop(box_name, None))
 
     def _place_box(self, box_name, box):
         # reuse canvas items and skip tk calls when the box did not move since the last frame
@@ -219,7 +235,17 @@ def draw_debug_label(debug_frame, label_text, label_x, label_y, label_anchor, bg
     )
 
 
-def draw_debug_frame(frame_bgr, detection_result, bar_box, screen_scale):
+def search_debug_boxes(frame_bgr, detection_result, bar_box):
+    # boxes of the minigame search region in frame coordinates
+    frame_height, frame_width = frame_bgr.shape[:2]
+    debug_boxes = {"search": (0, 0, frame_width, frame_height), "bar": bar_box}
+    if detection_result is not None:
+        debug_boxes["zone"] = detection_result["zone"]
+        debug_boxes["marker"] = detection_result["marker"]
+    return debug_boxes
+
+
+def draw_debug_frame(frame_bgr, debug_boxes, screen_scale, label_texts=None):
     # draw the same labeled boxes as the overlay on the captured frame with a border for labels
     margin_x = round(DEBUG_OVERLAY_MARGIN[0] * screen_scale)
     margin_y = round(DEBUG_OVERLAY_MARGIN[1] * screen_scale)
@@ -229,16 +255,13 @@ def draw_debug_frame(frame_bgr, detection_result, bar_box, screen_scale):
     line_width = max(2, round(DEBUG_LINE_WIDTH * screen_scale))
     label_gap = max(2, round(DEBUG_LABEL_GAP * screen_scale))
     font_scale = 0.42 * screen_scale
-    frame_height, frame_width = frame_bgr.shape[:2]
+    label_texts = label_texts or {}
 
-    debug_boxes = {"search": (0, 0, frame_width, frame_height), "bar": bar_box}
-    if detection_result is not None:
-        debug_boxes["zone"] = detection_result["zone"]
-        debug_boxes["marker"] = detection_result["marker"]
     for box_name, box in debug_boxes.items():
         if box is None:
             continue
-        _, label_text, label_side = DEBUG_BOX_STYLES[box_name]
+        _, default_label_text, label_side = DEBUG_BOX_STYLES[box_name]
+        label_text = label_texts.get(box_name, default_label_text)
         bgr_color = DEBUG_BOX_BGR_COLORS[box_name]
         box_x, box_y, box_width, box_height = box
         box_left, box_top = box_x + margin_x, box_y + margin_y
@@ -252,24 +275,28 @@ def draw_debug_frame(frame_bgr, detection_result, bar_box, screen_scale):
 
 
 class DebugWindow:
-    # separate cv2 window with the captured search region
+    # separate cv2 window with one captured region
 
-    def __init__(self):
+    def __init__(self, window_title):
+        self.window_title = window_title
         self.is_positioned = False
 
-    def show(self, debug_frame, search_region, monitor):
-        cv2.imshow(DEBUG_WINDOW_TITLE, debug_frame)
+    def show(self, debug_frame, screen_region, monitor):
+        cv2.imshow(self.window_title, debug_frame)
         if not self.is_positioned:
-            # place the window next to the search region so it never covers the bar
-            window_x = search_region["left"] - debug_frame.shape[1] - 40
+            # place the window next to the region so it never covers what is being captured
+            window_x = screen_region["left"] - debug_frame.shape[1] - 40
             if window_x < monitor["left"]:
-                window_x = search_region["left"] + search_region["width"] + 40
-            cv2.moveWindow(DEBUG_WINDOW_TITLE, window_x, search_region["top"])
-            window_handle = win32gui.FindWindow(None, DEBUG_WINDOW_TITLE)
+                window_x = screen_region["left"] + screen_region["width"] + 40
+            cv2.moveWindow(self.window_title, window_x, screen_region["top"])
+            window_handle = win32gui.FindWindow(None, self.window_title)
             if window_handle:
                 exclude_from_capture(window_handle)
             self.is_positioned = True
         cv2.waitKey(1)
 
     def close(self):
-        cv2.destroyAllWindows()
+        try:
+            cv2.destroyWindow(self.window_title)
+        except cv2.error:
+            pass
