@@ -12,11 +12,6 @@ STATE_MINIGAME = "MINIGAME"      # active fishing minigame
 STATE_COLLECTING = "COLLECTING"  # collect the catch and recast
 
 
-# webhook stub
-def send_catch_webhook_data(catch_data=None):
-    print("[WEBHOOK] Catch data:", catch_data)
-
-
 class FishingSession:
     # decide which input actions are needed for each frame
 

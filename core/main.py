@@ -1,6 +1,6 @@
 # entry point: command line, hotkeys, and the live capture loop that ties all modules together
 # settings.py - tunables, vision.py - detection, fishing.py - state machine, input_control.py - input,
-# region.py - search region, overlays.py - status hud and debug views
+# region.py - search region, overlays.py - status hud and debug views, events.py + integrations - notifications
 
 import argparse
 import ctypes
@@ -13,8 +13,10 @@ import mss
 import numpy as np
 import tkinter as tk
 
+import events
 import fishing
 import input_control
+import integrations
 import overlays
 import region
 import settings
@@ -105,11 +107,13 @@ def run_live(debug_mode):
 
         run_start_time = time.perf_counter()
         previous_frame_time = run_start_time
+        catch_count = 0
+        last_status_label = None
         fps = 0.0
 
         print(f"Screen: {monitor['width']}x{monitor['height']}, search region: {search_region}")
         print(
-            f"Bot ready. {settings.HOTKEY_TOGGLE.upper()} - start/pause, "
+            f"Bot ready. {settings.HOTKEY_TOGGLE.upper()} - start/stop, "
             f"{settings.HOTKEY_SELECT_REGION.upper()} - select search region, {settings.HOTKEY_EXIT.upper()} - exit."
         )
 
@@ -147,15 +151,22 @@ def run_live(debug_mode):
                     toggle_requested.clear()
                     bot_enabled = not bot_enabled
                     print(f"\n[BOT] Status: {'STARTED' if bot_enabled else 'STOPPED'}")
+                    if bot_enabled:
+                        events.emit(events.EVENT_BOT_STARTED)
+                    else:
+                        events.emit(events.EVENT_BOT_STOPPED, run_time=frame_start_time - run_start_time)
                     # both directions start from scratch: stop all input, reset the phase and the run timer
                     reset_bot_run(fishing_session, bar_tracker, frame_start_time)
                     run_start_time = frame_start_time
+                    catch_count = 0
                     if bot_enabled:
                         input_control.queue_action("click")
 
                 if input_control.consume_collect_done():
                     if bot_enabled and fishing_session.current_state == fishing.STATE_COLLECTING:
                         fishing_session.reset(frame_start_time)
+                        catch_count += 1
+                        events.emit(events.EVENT_CATCH_COLLECTED, catch_count=catch_count)
 
                 frame_bgr = cv2.cvtColor(np.asarray(screen_capture.grab(search_region)), cv2.COLOR_BGRA2BGR)
                 detection_result = vision.analyze_frame(frame_bgr, detection_scale, bar_tracker.bar_column)
@@ -173,6 +184,9 @@ def run_live(debug_mode):
                     status_label = STATE_LABELS.get(fishing_session.current_state, "IDLE")
                 else:
                     run_time, status_label = 0.0, "STOPPED"
+                if status_label != last_status_label:
+                    last_status_label = status_label
+                    events.emit(events.EVENT_STATUS_CHANGED, status=status_label)
                 status_hud.update(build_status_text(run_time, status_label, fps if debug_mode is not None else None))
 
                 if debug_overlay is not None:
@@ -224,6 +238,7 @@ if __name__ == "__main__":
     command_line_args = parse_args()
     enable_dpi_awareness()
     input_control.start_input_worker()
+    integrations.register_integrations()
     try:
         run_live(resolve_debug_mode(command_line_args))
     except Exception as error:

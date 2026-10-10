@@ -39,3 +39,7 @@ DEFAULT_SEARCH_REGION = {
 # the marker range is loose so the marker is still found when the translucent zone tints it
 ZONE_HSV_LO, ZONE_HSV_HI = (15, 40, 40), (85, 255, 255)
 MARKER_HSV_LO, MARKER_HSV_HI = (0, 0, 140), (180, 90, 255)
+
+# integrations (see core/integrations)
+DISCORD_WEBHOOK_ENABLED = False
+DISCORD_WEBHOOK_URL = ""

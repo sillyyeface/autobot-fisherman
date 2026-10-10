@@ -6,7 +6,6 @@ from queue import Empty, Queue
 
 import pydirectinput
 
-import fishing
 import settings
 
 # input stability settings
@@ -91,8 +90,6 @@ def run_collect_sequence(generation):
     if not collected:
         return
     print("[INPUT] Catch collected.")
-
-    fishing.send_catch_webhook_data()
 
     if not _wait(1.0, generation):
         return
