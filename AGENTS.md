@@ -1,10 +1,13 @@
 ## Project overview
 - This repository is a Windows-only desktop automation script for the Roblox Slayers2 fishing minigame.
-- `core/main.py` owns screen capture, input execution, overlays, the status HUD, and the live loop.
-- `core/fishing.py` owns HSV detection, the fishing state machine, and the webhook stub.
+- `core/main.py` owns screen capture, input execution, region selection, overlays, the status HUD, and the live loop.
+- `core/fishing.py` owns HSV detection, bar tracking, the fishing state machine, and the webhook stub.
 - `requirements.txt` lists the runtime dependencies: OpenCV, NumPy, pydirectinput, keyboard, mss, and pywin32.
-- The bot starts paused, uses `K` to toggle fishing, and uses `ESC` to exit.
-- Debug modes are `overlay` for click-through boxes and `window` for a cv2 preview window.
+- The bot starts paused, uses `K` to toggle fishing, `L` to select the search region, and `ESC` to exit.
+- Debug modes: `main.py debug [--overlay]` for click-through boxes and `main.py debug --window` for a cv2 preview window.
+- The process is DPI aware; all coordinates are physical pixels. Pixel constants in `fishing.py` are 1080p reference values scaled by `DetectionScale`.
+- The search region is stored in the git-ignored `config.json` as monitor fractions.
+- Overlay windows are click-through and excluded from screen capture; debug colors stay outside the detection HSV ranges.
 
 ## Coding conventions
 - Keep changes small and targeted. This project is a focused bot script, not a broad framework.
