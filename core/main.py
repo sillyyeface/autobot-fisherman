@@ -48,10 +48,18 @@ STATE_LABELS = {
 TRANSPARENT_KEY = "#000000"  # color key that becomes fully transparent in overlay windows
 
 # debug colors stay outside the zone and marker hsv ranges, so a captured overlay is never detected
-DEBUG_COLOR_SEARCH = "#3070FF"  # blue
-DEBUG_COLOR_BAR = "#FF00FF"     # magenta
-DEBUG_COLOR_ZONE = "#FF2020"    # red
-DEBUG_COLOR_MARKER = "#00FFFF"  # cyan
+# they are also bright warm or violet tones that stand out on the blue water and the dark bar
+DEBUG_COLOR_SEARCH = "#FF6000"  # orange
+DEBUG_COLOR_BAR = "#C060FF"     # violet
+DEBUG_COLOR_ZONE = "#FF1A1A"    # red
+DEBUG_COLOR_MARKER = "#FF40C0"  # pink
+DEBUG_LABEL_PLATE = "#101010"   # near-black label plate, pure black is the transparent key
+
+# debug drawing sizes in 1080p pixels, scaled by the screen height
+DEBUG_LINE_WIDTH = 3
+DEBUG_LABEL_FONT_SIZE = 12
+DEBUG_LABEL_GAP = 4
+DEBUG_OVERLAY_MARGIN = (90, 24)  # extra room around the search region for labels (x, y)
 
 DEBUG_WINDOW_TITLE = "fisherman vision"
 
@@ -215,58 +223,144 @@ class StatusHUD:
         self.window.geometry(geometry)
 
 
-class DebugOverlay:
-    # click-through boxes over the screen: search region, bar, zone, and marker
+def label_anchor_point(box_left, box_top, box_right, box_bottom, label_side, gap):
+    # point and tk anchor for a label next to a box; zone labels go right, marker and bar labels go left
+    if label_side == "above":
+        return box_left, box_top - gap, "sw"
+    if label_side == "right":
+        return box_right + gap, box_top, "nw"
+    if label_side == "left_top":
+        return box_left - gap, box_top, "ne"
+    return box_left - gap, (box_top + box_bottom) / 2, "e"
 
-    def __init__(self, root_window, search_region):
+
+DEBUG_BOX_STYLES = {
+    "search": (DEBUG_COLOR_SEARCH, "SEARCH", "above"),
+    "bar": (DEBUG_COLOR_BAR, "BAR", "left_top"),
+    "zone": (DEBUG_COLOR_ZONE, "ZONE", "right"),
+    "marker": (DEBUG_COLOR_MARKER, "MARKER", "left"),
+}
+
+
+class DebugOverlay:
+    # click-through labeled boxes over the screen: search region, bar, zone, and marker
+
+    def __init__(self, root_window, search_region, screen_scale):
+        self.margin_x = round(DEBUG_OVERLAY_MARGIN[0] * screen_scale)
+        self.margin_y = round(DEBUG_OVERLAY_MARGIN[1] * screen_scale)
+        self.label_gap = max(2, round(DEBUG_LABEL_GAP * screen_scale))
+        line_width = max(2, round(DEBUG_LINE_WIDTH * screen_scale))
+        label_font = ("Consolas", -round(DEBUG_LABEL_FONT_SIZE * screen_scale), "bold")
+
         self.window = create_overlay_window(root_window, TRANSPARENT_KEY)
         self.canvas = tk.Canvas(self.window, bg=TRANSPARENT_KEY, highlightthickness=0)
         self.canvas.pack(fill="both", expand=True)
-        self.search_rect = self.canvas.create_rectangle(0, 0, 0, 0, outline=DEBUG_COLOR_SEARCH, width=2, dash=(6, 4))
-        self.bar_rect = self.canvas.create_rectangle(0, 0, 0, 0, outline=DEBUG_COLOR_BAR, width=2, state="hidden")
-        self.zone_rect = self.canvas.create_rectangle(0, 0, 0, 0, outline=DEBUG_COLOR_ZONE, width=2, state="hidden")
-        self.marker_rect = self.canvas.create_rectangle(0, 0, 0, 0, outline=DEBUG_COLOR_MARKER, width=2, state="hidden")
+        # each box is a rectangle, a dark label plate, and the label text
+        self.canvas_items = {}
+        for box_name, (color, label_text, _) in DEBUG_BOX_STYLES.items():
+            self.canvas_items[box_name] = (
+                self.canvas.create_rectangle(
+                    0, 0, 0, 0, outline=color, width=line_width,
+                    dash=(6, 4) if box_name == "search" else None, state="hidden",
+                ),
+                self.canvas.create_rectangle(0, 0, 0, 0, fill=DEBUG_LABEL_PLATE, outline="", state="hidden"),
+                self.canvas.create_text(0, 0, text=label_text, fill=color, font=label_font, state="hidden"),
+            )
         self.move_to(search_region)
 
     def move_to(self, search_region):
         width, height = search_region["width"], search_region["height"]
-        self.window.geometry(f"{width}x{height}+{search_region['left']}+{search_region['top']}")
-        self.canvas.config(width=width, height=height)
-        self.canvas.coords(self.search_rect, 1, 1, width - 1, height - 1)
+        window_width, window_height = width + 2 * self.margin_x, height + 2 * self.margin_y
+        window_left, window_top = search_region["left"] - self.margin_x, search_region["top"] - self.margin_y
+        self.window.geometry(f"{window_width}x{window_height}+{window_left}+{window_top}")
+        self.canvas.config(width=window_width, height=window_height)
+        self._place_box("search", (0, 0, width, height))
 
-    def _place_box(self, canvas_item, box):
+    def _place_box(self, box_name, box):
         # reuse canvas items instead of recreating them every frame
+        rect_item, plate_item, text_item = self.canvas_items[box_name]
         if box is None:
-            self.canvas.itemconfigure(canvas_item, state="hidden")
+            for canvas_item in (rect_item, plate_item, text_item):
+                self.canvas.itemconfigure(canvas_item, state="hidden")
             return
         box_x, box_y, box_width, box_height = box
-        self.canvas.coords(canvas_item, box_x, box_y, box_x + box_width, box_y + box_height)
-        self.canvas.itemconfigure(canvas_item, state="normal")
+        box_left, box_top = box_x + self.margin_x, box_y + self.margin_y
+        box_right, box_bottom = box_left + box_width, box_top + box_height
+        self.canvas.coords(rect_item, box_left, box_top, box_right, box_bottom)
+
+        label_side = DEBUG_BOX_STYLES[box_name][2]
+        label_x, label_y, label_anchor = label_anchor_point(
+            box_left, box_top, box_right, box_bottom, label_side, self.label_gap
+        )
+        self.canvas.coords(text_item, label_x, label_y)
+        for canvas_item in (rect_item, plate_item, text_item):
+            self.canvas.itemconfigure(canvas_item, state="normal")
+        # bbox is only available for visible items
+        self.canvas.itemconfigure(text_item, anchor=label_anchor)
+        text_left, text_top, text_right, text_bottom = self.canvas.bbox(text_item)
+        self.canvas.coords(plate_item, text_left - 2, text_top - 1, text_right + 2, text_bottom + 1)
 
     def update(self, detection_result, bar_box):
-        self._place_box(self.bar_rect, bar_box)
-        self._place_box(self.zone_rect, detection_result["zone"] if detection_result else None)
-        self._place_box(self.marker_rect, detection_result["marker"] if detection_result else None)
+        self._place_box("bar", bar_box)
+        self._place_box("zone", detection_result["zone"] if detection_result else None)
+        self._place_box("marker", detection_result["marker"] if detection_result else None)
 
 
 def hex_to_bgr(hex_color):
     return tuple(int(hex_color[index:index + 2], 16) for index in (5, 3, 1))
 
 
-def draw_debug_frame(frame_bgr, detection_result, bar_box):
-    # draw the same boxes as the overlay on a copy of the captured frame
-    debug_frame = frame_bgr.copy()
-    frame_height, frame_width = debug_frame.shape[:2]
-    cv2.rectangle(debug_frame, (0, 0), (frame_width - 1, frame_height - 1), hex_to_bgr(DEBUG_COLOR_SEARCH), 1)
-    debug_boxes = [(bar_box, DEBUG_COLOR_BAR)]
+def draw_debug_label(debug_frame, label_text, label_x, label_y, label_anchor, bgr_color, font_scale):
+    # cv2 version of a tk anchored label on a dark plate
+    (text_width, text_height), baseline = cv2.getTextSize(label_text, cv2.FONT_HERSHEY_SIMPLEX, font_scale, 1)
+    text_left = label_x - text_width if "e" in label_anchor else label_x
+    if label_anchor.startswith("s"):
+        text_top = label_y - text_height - baseline
+    elif label_anchor.startswith("n"):
+        text_top = label_y
+    else:
+        text_top = label_y - (text_height + baseline) / 2
+    text_left, text_top = int(text_left), int(text_top)
+    plate_bgr = hex_to_bgr(DEBUG_LABEL_PLATE)
+    cv2.rectangle(
+        debug_frame, (text_left - 2, text_top - 1),
+        (text_left + text_width + 2, text_top + text_height + baseline + 1), plate_bgr, -1,
+    )
+    cv2.putText(
+        debug_frame, label_text, (text_left, text_top + text_height),
+        cv2.FONT_HERSHEY_SIMPLEX, font_scale, bgr_color, 1, cv2.LINE_AA,
+    )
+
+
+def draw_debug_frame(frame_bgr, detection_result, bar_box, screen_scale):
+    # draw the same labeled boxes as the overlay on the captured frame with a border for labels
+    margin_x = round(DEBUG_OVERLAY_MARGIN[0] * screen_scale)
+    margin_y = round(DEBUG_OVERLAY_MARGIN[1] * screen_scale)
+    debug_frame = cv2.copyMakeBorder(
+        frame_bgr, margin_y, margin_y, margin_x, margin_x, cv2.BORDER_CONSTANT, value=(24, 24, 24)
+    )
+    line_width = max(2, round(DEBUG_LINE_WIDTH * screen_scale))
+    label_gap = max(2, round(DEBUG_LABEL_GAP * screen_scale))
+    font_scale = 0.42 * screen_scale
+    frame_height, frame_width = frame_bgr.shape[:2]
+
+    debug_boxes = {"search": (0, 0, frame_width, frame_height), "bar": bar_box}
     if detection_result is not None:
-        debug_boxes.append((detection_result["zone"], DEBUG_COLOR_ZONE))
-        debug_boxes.append((detection_result["marker"], DEBUG_COLOR_MARKER))
-    for box, hex_color in debug_boxes:
+        debug_boxes["zone"] = detection_result["zone"]
+        debug_boxes["marker"] = detection_result["marker"]
+    for box_name, box in debug_boxes.items():
         if box is None:
             continue
+        hex_color, label_text, label_side = DEBUG_BOX_STYLES[box_name]
+        bgr_color = hex_to_bgr(hex_color)
         box_x, box_y, box_width, box_height = box
-        cv2.rectangle(debug_frame, (box_x, box_y), (box_x + box_width, box_y + box_height), hex_to_bgr(hex_color), 2)
+        box_left, box_top = box_x + margin_x, box_y + margin_y
+        box_right, box_bottom = box_left + box_width, box_top + box_height
+        cv2.rectangle(debug_frame, (box_left, box_top), (box_right, box_bottom), bgr_color, line_width)
+        label_x, label_y, label_anchor = label_anchor_point(
+            box_left, box_top, box_right, box_bottom, label_side, label_gap
+        )
+        draw_debug_label(debug_frame, label_text, label_x, label_y, label_anchor, bgr_color, font_scale)
     return debug_frame
 
 
@@ -420,7 +514,7 @@ def run_live(debug_mode):
         search_region = fractions_to_region(load_search_fractions(), monitor)
 
         status_hud = StatusHUD(root_window, screen_scale, monitor)
-        debug_overlay = DebugOverlay(root_window, search_region) if debug_mode == "overlay" else None
+        debug_overlay = DebugOverlay(root_window, search_region, screen_scale) if debug_mode == "overlay" else None
         debug_window = DebugWindow() if debug_mode == "window" else None
 
         fishing_session = fishing.FishingSession()
@@ -497,7 +591,7 @@ def run_live(debug_mode):
                 if debug_overlay is not None:
                     debug_overlay.update(detection_result, bar_tracker.bar_box())
                 elif debug_window is not None:
-                    debug_frame = draw_debug_frame(frame_bgr, detection_result, bar_tracker.bar_box())
+                    debug_frame = draw_debug_frame(frame_bgr, detection_result, bar_tracker.bar_box(), screen_scale)
                     debug_window.show(debug_frame, search_region, monitor)
 
                 root_window.update()
