@@ -64,4 +64,4 @@ DISCORD_SEND_SNAPSHOT = True  # attach the notification snapshot where a message
 # discord rich presence: run timer, status, and confirmed catches on your discord profile (needs the desktop client)
 # create an application at discord.com/developers/applications and paste its application id here; the app name is shown as the game name
 DISCORD_RPC_ENABLED = True
-DISCORD_RPC_CLIENT_ID = ""
+DISCORD_RPC_CLIENT_ID = "1558588546942763130"
