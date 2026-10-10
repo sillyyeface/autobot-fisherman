@@ -116,8 +116,6 @@ def input_command_worker():
             print("[INPUT] Ready. Waiting for the next bite...")
             collect_sequence_done.set()  # the main loop resets the session
 
-        input_action_queue.task_done()
-
 
 # search region config
 def region_to_fractions(search_region, monitor):
@@ -266,6 +264,7 @@ class DebugOverlay:
                 self.canvas.create_rectangle(0, 0, 0, 0, fill=DEBUG_LABEL_PLATE, outline="", state="hidden"),
                 self.canvas.create_text(0, 0, text=label_text, fill=color, font=label_font, state="hidden"),
             )
+        self.placed_boxes = {}
         self.move_to(search_region)
 
     def move_to(self, search_region):
@@ -277,7 +276,10 @@ class DebugOverlay:
         self._place_box("search", (0, 0, width, height))
 
     def _place_box(self, box_name, box):
-        # reuse canvas items instead of recreating them every frame
+        # reuse canvas items and skip tk calls when the box did not move since the last frame
+        if box_name in self.placed_boxes and self.placed_boxes[box_name] == box:
+            return
+        self.placed_boxes[box_name] = box
         rect_item, plate_item, text_item = self.canvas_items[box_name]
         if box is None:
             for canvas_item in (rect_item, plate_item, text_item):
@@ -310,6 +312,11 @@ def hex_to_bgr(hex_color):
     return tuple(int(hex_color[index:index + 2], 16) for index in (5, 3, 1))
 
 
+# cv2 colors parsed once instead of every debug frame
+DEBUG_BOX_BGR_COLORS = {box_name: hex_to_bgr(style[0]) for box_name, style in DEBUG_BOX_STYLES.items()}
+DEBUG_LABEL_PLATE_BGR = hex_to_bgr(DEBUG_LABEL_PLATE)
+
+
 def draw_debug_label(debug_frame, label_text, label_x, label_y, label_anchor, bgr_color, font_scale):
     # cv2 version of a tk anchored label on a dark plate
     (text_width, text_height), baseline = cv2.getTextSize(label_text, cv2.FONT_HERSHEY_SIMPLEX, font_scale, 1)
@@ -321,10 +328,9 @@ def draw_debug_label(debug_frame, label_text, label_x, label_y, label_anchor, bg
     else:
         text_top = label_y - (text_height + baseline) / 2
     text_left, text_top = int(text_left), int(text_top)
-    plate_bgr = hex_to_bgr(DEBUG_LABEL_PLATE)
     cv2.rectangle(
         debug_frame, (text_left - 2, text_top - 1),
-        (text_left + text_width + 2, text_top + text_height + baseline + 1), plate_bgr, -1,
+        (text_left + text_width + 2, text_top + text_height + baseline + 1), DEBUG_LABEL_PLATE_BGR, -1,
     )
     cv2.putText(
         debug_frame, label_text, (text_left, text_top + text_height),
@@ -351,8 +357,8 @@ def draw_debug_frame(frame_bgr, detection_result, bar_box, screen_scale):
     for box_name, box in debug_boxes.items():
         if box is None:
             continue
-        hex_color, label_text, label_side = DEBUG_BOX_STYLES[box_name]
-        bgr_color = hex_to_bgr(hex_color)
+        _, label_text, label_side = DEBUG_BOX_STYLES[box_name]
+        bgr_color = DEBUG_BOX_BGR_COLORS[box_name]
         box_x, box_y, box_width, box_height = box
         box_left, box_top = box_x + margin_x, box_y + margin_y
         box_right, box_bottom = box_left + box_width, box_top + box_height

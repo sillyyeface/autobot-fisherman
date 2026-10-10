@@ -51,7 +51,6 @@ class DetectionScale:
     # detection thresholds for the current screen, derived from the 1080p reference values
 
     def __init__(self, screen_scale):
-        self.screen_scale = screen_scale
         area_scale = screen_scale ** 2
         self.zone_min_area = ZONE_MIN_AREA * area_scale
         self.marker_min_area = MARKER_MIN_AREA * area_scale
