@@ -1,0 +1,18 @@
+{
+  "catch_confirmed": {
+    "embeds": [
+      {
+        "title": "Slayers 2 | Fishing Catch",
+        "timestamp": "{timestamp}",
+        "color": 4149686,
+        "footer": { "text": "Fisherman" },
+        "thumbnail": { "url": "https://emojigraph.org/media/apple/fish_1f41f.png" },
+        "fields": [
+          { "name": "Name", "value": "{catch_name}", "inline": true },
+          { "name": "Quantity", "value": "x{catch_count}", "inline": true },
+          { "name": "Session length", "value": "{run_time}" }
+        ]
+      }
+    ]
+  }
+}

@@ -1,10 +1,29 @@
 ## Project overview
 - This repository is a Windows-only desktop automation script for the Roblox Slayers2 fishing minigame.
-- `core/main.py` owns screen capture, input execution, overlays, the status HUD, and the live loop.
-- `core/fishing.py` owns HSV detection, the fishing state machine, and the webhook stub.
-- `requirements.txt` lists the runtime dependencies: OpenCV, NumPy, pydirectinput, keyboard, mss, and pywin32.
-- The bot starts paused, uses `K` to toggle fishing, and uses `ESC` to exit.
-- Debug modes are `overlay` for click-through boxes and `window` for a cv2 preview window.
+- `core/main.py` owns the command line, the startup region selection, the hotkey, and the live loop that wires the modules together.
+- `core/settings.py` holds every user-tunable constant; keep new tunables there, keep internal constants in their modules.
+- `core/vision.py` owns HSV detection, `DetectionScale`, and `BarTracker`.
+- `core/fishing.py` owns the fishing state machine and marker control.
+- `core/input_control.py` owns the input worker, the collect sequence, and cancellation via action generations.
+- `core/region.py` owns region math, `config.json`, and the startup selection screen for the search and notification regions.
+- `core/catch_detection.py` owns catch confirmation: Windows OCR (winrt) of the notification region on a worker thread, name parsing, and snapshots.
+- `core/overlays.py` owns click-through windows, the status HUD, and both debug views.
+- `core/events.py` is a non-blocking event hub; `core/integrations/` modules subscribe to it and are enabled in `settings.py`.
+- `core/integrations/discord_webhook.py` sends the per-event payloads from `discord_messages.json` (plain Discord webhook JSON with `{placeholders}`) using only the standard library; `{snapshot}` attaches the catch snapshot. The webhook url lives in the git-ignored `config.json` (`discord_webhook_url`), never in `settings.py`.
+- `requirements.txt` lists the runtime dependencies: OpenCV, NumPy, pydirectinput, keyboard, mss, pywin32, and the winrt OCR packages.
+- On launch both regions are confirmed or reselected (Enter, Esc, or right click keeps the saved box); there is no region hotkey.
+- The bot starts stopped. `K` is the only hotkey and starts or stops the run (stop cancels input and resets the timer and phase); exit with Ctrl+C or by closing the console.
+- Debug modes: `main.py debug [--overlay]` for click-through boxes and `main.py debug --window` for a cv2 preview window.
+- The process is DPI aware; all coordinates are physical pixels. Pixel constants in `vision.py` are 1080p reference values scaled by `DetectionScale`.
+- The search and notification regions are stored in the git-ignored `config.json` as monitor fractions; only the primary monitor is supported.
+- `CatchWatcher` starts when the session enters `COLLECTING`; a catch is confirmed after `CATCH_CONFIRM_READS` equal OCR reads, otherwise `catch_missed` fires after `CATCH_WATCH_TIMEOUT`.
+- The marker is searched only inside the bar column derived from the zone; `BarTracker` keeps that column for `BAR_FORGET_TIMEOUT` when the zone flickers.
+- `FishingSession.should_press` holds while the predicted marker is below the predicted zone center; `PREDICTION_TIME` is the main tuning knob and should stay validated against real gameplay.
+- Overlay windows are click-through, non-activating, and excluded from screen capture; debug colors stay outside the detection HSV ranges (no yellow, green, or white).
+- The status HUD sits below the Roblox top bar (`STATUS_HUD_POSITION`, 1080p pixels).
+- Hotkey callbacks only set events; all state changes happen in the main loop thread.
+- `MINIGAME_TIMEOUT` ends a minigame that never loses its detection; `WAITING_TIMEOUT` recasts when no bite comes.
+- Vision runs at `TARGET_FPS_MINIGAME` during the minigame and `TARGET_FPS_WAITING` / `TARGET_FPS_IDLE` otherwise.
 
 ## Coding conventions
 - Keep changes small and targeted. This project is a focused bot script, not a broad framework.

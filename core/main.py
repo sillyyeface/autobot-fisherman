@@ -1,238 +1,282 @@
+# entry point: command line, startup region selection, the hotkey, and the live capture loop
+# settings.py - tunables, vision.py - detection, fishing.py - state machine, input_control.py - input,
+# region.py - minigame and notification regions, catch_detection.py - catch notification ocr,
+# overlays.py - status hud and debug views, events.py + integrations - notifications
+
+import argparse
+import ctypes
+import threading
 import time
+
 import cv2
-import numpy as np
-import pydirectinput
 import keyboard
 import mss
-import threading
-from queue import Queue
+import numpy as np
+import tkinter as tk
 
-# --- НАСТРОЙКИ СТАБИЛЬНОСТИ ИНПУТА ---
-pydirectinput.PAUSE = 0.001
-pydirectinput.FAILSAFE = False
+import catch_detection
+import events
+import fishing
+import input_control
+import integrations
+import overlays
+import region
+import settings
+import vision
 
-# --- НАСТРОЙКИ ИГРЫ ---
-HOLD_T_DURATION = 8.0          # Сколько секунд удерживать Т для сбора улова
-AUTOCLICKER_ENABLED = False     # По умолчанию бот на паузе
-DISAPPEAR_TIMEOUT = 0.35       # Задержка проверки конца мини-игры (в секундах)
-WAITING_TIMEOUT = 30.0         # Время ожидания поклевки до перезаброса (в секундах)
-
-# --- СОСТОЯНИЯ БОТА ---
-STATE_WAITING = "WAITING"        # Ожидание появления шкалы (клев)
-STATE_MINIGAME = "MINIGAME"      # Процесс ловли
-STATE_COLLECTING = "COLLECTING"  # Сбор улова и перезаброс
-
-current_state = STATE_WAITING
-
-# --- ТОЧНАЯ ОБЛАСТЬ ЗАХВАТА ШКАЛЫ (для 1920x1080) ---
-CAPTURE_ROI = {
-    "top": 280,      # Отступ сверху
-    "left": 1380,    # Отступ слева (правая часть экрана)
-    "width": 180,    # Ширина захвата
-    "height": 480    # Высота захвата
+STATE_LABELS = {
+    fishing.STATE_WAITING: "WAITING FOR BITE",
+    fishing.STATE_MINIGAME: "CATCHING FISH",
+    fishing.STATE_COLLECTING: "COLLECTING CATCH",
 }
 
-# Цветовые диапазоны HSV (Желто-зеленая зона и Белый маркер)
-ZONE_HSV_LO, ZONE_HSV_HI = (15, 40, 40), (85, 255, 255)
-MARKER_HSV_LO, MARKER_HSV_HI = (0, 0, 150), (180, 60, 255)
 
-ZONE_MIN_AREA = 40
-MARKER_MIN_AREA = 80
+def enable_dpi_awareness():
+    # use physical pixels everywhere so capture, overlays, and clicks agree on scaled displays
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+    except (AttributeError, OSError):
+        ctypes.windll.user32.SetProcessDPIAware()
 
-input_queue = Queue()
 
-def safe_click():
-    """Надежный клик для Roblox с задержкой нажатия"""
-    pydirectinput.mouseDown()
-    time.sleep(0.08)
-    pydirectinput.mouseUp()
+def format_uptime(elapsed_seconds):
+    hours, remainder = divmod(int(elapsed_seconds), 3600)
+    minutes, seconds = divmod(remainder, 60)
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
 
-# --- АСИНХРОННЫЙ ПОТОК ВВОДА ---
-def input_worker():
-    global current_state
-    while True:
-        command = input_queue.get()
-        if command == "click":
-            safe_click()
-        elif command == "down":
-            pydirectinput.mouseDown()
-        elif command == "up":
-            pydirectinput.mouseUp()
-        elif command == "collect_sequence":
-            pydirectinput.mouseUp()
-            
-            print("[ПОТОК ВВОДА] Ждем 3 секунды анимации поимки...")
-            time.sleep(3.0)
-            
-            print("[ПОТОК ВВОДА] Зажимаем T для сбора рыбы...")
-            pydirectinput.keyDown('t')
-            time.sleep(HOLD_T_DURATION)
-            pydirectinput.keyUp('t')
-            print("[ПОТОК ВВОДА] Улов собран.")
-            
-            time.sleep(1.0)
-            print("[ПОТОК ВВОДА] Забрасываем удочку...")
-            safe_click()
-            time.sleep(1.5)  # Задержка на анимацию броска
-            
-            print("[ПОТОК ВВОДА] Готово! Переходим в режим ожидания поклевки...")
-            current_state = STATE_WAITING  # Сбрасываем состояние на ожидание
-            
-        input_queue.task_done()
 
-threading.Thread(target=input_worker, daemon=True).start()
+def build_status_text(elapsed_seconds, status_label, last_catch=None, fps=None):
+    # run time since the last start on top, the current phase below, then the last confirmed catch,
+    # fps only in debug modes
+    status_lines = [format_uptime(elapsed_seconds), status_label]
+    if last_catch is not None:
+        status_lines.append(f"LAST: {last_catch[0]} x{last_catch[1]}")
+    if fps is not None:
+        status_lines.append(f"{fps:.0f} FPS")
+    return "\n".join(status_lines)
 
-# --- ДЕТЕКЦИЯ ПО ЦВЕТУ (HSV) ---
-def _largest_contour_box(mask, min_area):
-    cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    if not cnts: return None
-    c = max(cnts, key=cv2.contourArea)
-    return cv2.boundingRect(c) if cv2.contourArea(c) >= min_area else None
 
-def find_zone(hsv_img):
-    mask = cv2.inRange(hsv_img, ZONE_HSV_LO, ZONE_HSV_HI)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((5,5), np.uint8))
-    return _largest_contour_box(mask, ZONE_MIN_AREA)
+def target_fps_for(bot_enabled, session_state):
+    if not bot_enabled:
+        return settings.TARGET_FPS_IDLE
+    if session_state == fishing.STATE_MINIGAME:
+        return settings.TARGET_FPS_MINIGAME
+    if session_state == fishing.STATE_WAITING:
+        return settings.TARGET_FPS_WAITING
+    return settings.TARGET_FPS_IDLE
 
-def find_marker(hsv_img):
-    mask = cv2.inRange(hsv_img, MARKER_HSV_LO, MARKER_HSV_HI)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((3,3), np.uint8))
-    return _largest_contour_box(mask, MARKER_MIN_AREA)
 
-def analyze_static(bgr):
-    hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
-    zone = find_zone(hsv)
-    marker = find_marker(hsv)
-    
-    if zone is None and marker is None:
-        return None
-        
-    res = {"zone": zone, "marker": marker}
-    if marker is not None:
-        res["marker_center_y"] = marker[1] + marker[3] / 2
-    if zone is not None:
-        res["zone_top"] = zone[1]
-        res["zone_bottom"] = zone[1] + zone[3]
-    return res
+def reset_bot_run(fishing_session, bar_tracker, catch_watcher, current_time):
+    # cancel queued and running input, release everything, and return to the first phase
+    input_control.cancel_and_release()
+    fishing_session.reset(current_time)
+    bar_tracker.reset()
+    catch_watcher.cancel()
 
-def draw_analysis(bgr, res, fps):
-    out = bgr.copy()
-    color = (0, 255, 0) if AUTOCLICKER_ENABLED else (0, 0, 255)
-    text = f"STATUS: {'ACTIVE' if AUTOCLICKER_ENABLED else 'PAUSED'} [{current_state}]"
-    cv2.putText(out, text, (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
-    cv2.putText(out, f"{fps:.0f} FPS", (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
-    
-    if res is None: return out
-    
-    if res.get("zone") is not None:
-        zx, zy, zw, zh = res["zone"]
-        cv2.rectangle(out, (zx, zy), (zx + zw, zy + zh), (0, 255, 0), 2)
-    if res.get("marker") is not None:
-        mx, my, mw, mh = res["marker"]
-        cv2.rectangle(out, (mx, my), (mx + mw, my + mh), (0, 255, 255), 2)
-        
-    return out
 
-def toggle_bot():
-    global AUTOCLICKER_ENABLED, current_state
-    AUTOCLICKER_ENABLED = not AUTOCLICKER_ENABLED
-    print(f"\n[БОТ] СТАТУС: {AUTOCLICKER_ENABLED}")
-    if AUTOCLICKER_ENABLED:
-        current_state = STATE_WAITING
-        input_queue.put("click")
+def watch_toggle_key(toggle_requested):
+    # keyboard.add_hotkey only fires when no other key is down, so it missed k while the bot holds t;
+    # a key hook fires regardless, and key repeat is ignored until the key is released
+    toggle_key_state = {"is_down": False}
 
-# --- ГЛАВНЫЙ ПОТОК ---
-def run_live():
-    global AUTOCLICKER_ENABLED, current_state
-    keyboard.add_hotkey('k', toggle_bot)
-    
-    is_pressing = False
-    last_seen_time = 0.0
-    wait_start_time = time.perf_counter()
-    prev_state = None
+    def on_toggle_key(key_event):
+        if key_event.event_type == keyboard.KEY_UP:
+            toggle_key_state["is_down"] = False
+        elif not toggle_key_state["is_down"]:
+            toggle_key_state["is_down"] = True
+            toggle_requested.set()
 
-    with mss.mss() as sct:
-        print("Бот готов (система состояний включена). Нажмите K для старта.")
-        prev = time.perf_counter()
+    keyboard.hook_key(settings.HOTKEY_TOGGLE, on_toggle_key)
+
+
+def capture_bgr(screen_capture, screen_region):
+    return cv2.cvtColor(np.asarray(screen_capture.grab(screen_region)), cv2.COLOR_BGRA2BGR)
+
+
+def run_live(debug_mode):
+    # debug_mode can be None, overlay, or window
+    root_window = tk.Tk()
+    root_window.withdraw()  # hidden container for the overlay windows
+
+    with mss.MSS() as screen_capture:
+        monitor = screen_capture.monitors[1]
+        screen_scale = monitor["height"] / vision.REFERENCE_SCREEN_HEIGHT
+        detection_scale = vision.DetectionScale(screen_scale)
+
+        # both regions are confirmed or picked on every launch, before the hotkey is active
+        search_region, notification_region = region.select_startup_regions(
+            root_window, screen_capture, monitor, screen_scale
+        )
+
+        # the hotkey only sets a flag; all state changes happen in this thread
+        toggle_requested = threading.Event()
+        watch_toggle_key(toggle_requested)
+
+        status_hud = overlays.StatusHUD(root_window, screen_scale, monitor)
+        debug_overlay = notification_overlay = debug_window = notification_window = None
+        if debug_mode == "overlay":
+            debug_overlay = overlays.DebugOverlay(root_window, search_region, screen_scale)
+            notification_overlay = overlays.DebugOverlay(
+                root_window, notification_region, screen_scale, region_box_name="notification"
+            )
+        elif debug_mode == "window":
+            debug_window = overlays.DebugWindow(overlays.DEBUG_WINDOW_TITLE)
+            notification_window = overlays.DebugWindow(overlays.DEBUG_NOTIFICATION_WINDOW_TITLE)
+
+        fishing_session = fishing.FishingSession()
+        bar_tracker = vision.BarTracker()
+        catch_watcher = catch_detection.CatchWatcher(screen_scale)
+        bot_enabled = False
+
+        run_start_time = time.perf_counter()
+        previous_frame_time = run_start_time
+        catch_count = 0
+        confirmed_catch_count = 0
+        last_status_label = None
         fps = 0.0
-        
-        while True:
-            frame = np.array(sct.grab(CAPTURE_ROI))[:, :, :3]
-            res = analyze_static(frame)
-            
-            now = time.perf_counter()
-            fps = 0.9 * fps + 0.1 * (1.0 / max(now - prev, 1e-6))
-            prev = now
 
-            # Фиксация смены состояния для обновления таймера ожидания
-            if current_state != prev_state:
-                if current_state == STATE_WAITING:
-                    wait_start_time = now
-                prev_state = current_state
+        def capture_notification():
+            return capture_bgr(screen_capture, notification_region)
 
-            out = draw_analysis(frame, res, fps)
-            
-            if AUTOCLICKER_ENABLED:
-                has_scale = (res is not None) and ("zone_bottom" in res or "marker_center_y" in res)
-                
-                # --- ЛОГИКА СОСТОЯНИЙ ---
-                if current_state == STATE_WAITING:
-                    if has_scale:
-                        print("[БОТ] Шкала обнаружена! Начинаем ловлю...")
-                        current_state = STATE_MINIGAME
-                        last_seen_time = now
+        print(f"Screen: {monitor['width']}x{monitor['height']}")
+        print(f"Search region: {search_region}")
+        print(f"Notification region: {notification_region}")
+        if not catch_watcher.is_available:
+            print("[CATCH] Windows OCR is not available, catches are not confirmed. Run: pip install -r requirements.txt")
+        print(f"Bot ready. {settings.HOTKEY_TOGGLE.upper()} - start/stop, Ctrl+C in this console - exit.")
+
+        try:
+            while True:
+                frame_start_time = time.perf_counter()
+
+                if toggle_requested.is_set():
+                    toggle_requested.clear()
+                    bot_enabled = not bot_enabled
+                    print(f"[BOT] Status: {'STARTED' if bot_enabled else 'STOPPED'}")
+                    if bot_enabled:
+                        events.emit(events.EVENT_BOT_STARTED)
                     else:
-                        # Проверка 30-секундного таймаута без шкалы
-                        if (now - wait_start_time) >= WAITING_TIMEOUT:
-                            print(f"[БОТ] Шкала не появилась за {WAITING_TIMEOUT}s. Перезабрасываем удочку...")
-                            input_queue.put("click")
-                            wait_start_time = now  # Перезапускаем таймер
-                        
-                elif current_state == STATE_MINIGAME:
-                    if has_scale:
-                        last_seen_time = now  # Обновляем таймер
-                        
-                        if "marker_center_y" in res and "zone_bottom" in res:
-                            m_y = res["marker_center_y"]
-                            z_bot = res["zone_bottom"]
-                            
-                            if m_y > z_bot:
-                                if not is_pressing:
-                                    input_queue.put("down")
-                                    is_pressing = True
-                            else:
-                                if is_pressing:
-                                    input_queue.put("up")
-                                    is_pressing = False
-                    else:
-                        if is_pressing:
-                            input_queue.put("up")
-                            is_pressing = False
-                        
-                        if (now - last_seen_time) >= DISAPPEAR_TIMEOUT:
-                            print(f"[БОТ] Шкала пропала более чем на {DISAPPEAR_TIMEOUT}s. Мини-игра завершена.")
-                            current_state = STATE_COLLECTING
-                            input_queue.put("collect_sequence")
-                            
-                elif current_state == STATE_COLLECTING:
-                    if is_pressing:
-                        input_queue.put("up")
-                        is_pressing = False
+                        events.emit(events.EVENT_BOT_STOPPED, run_time=frame_start_time - run_start_time)
+                    # both directions start from scratch: stop all input, reset the phase and the run timer
+                    reset_bot_run(fishing_session, bar_tracker, catch_watcher, frame_start_time)
+                    run_start_time = frame_start_time
+                    catch_count = 0
+                    confirmed_catch_count = 0
+                    if bot_enabled:
+                        input_control.queue_action("click")
 
-            else:
-                if is_pressing:
-                    input_queue.put("up")
-                    is_pressing = False
+                if input_control.consume_collect_done():
+                    if bot_enabled and fishing_session.current_state == fishing.STATE_COLLECTING:
+                        fishing_session.reset(frame_start_time)
+                        catch_count += 1
+                        events.emit(events.EVENT_CATCH_COLLECTED, catch_count=catch_count)
 
-            cv2.imshow("track detector", out)
-            if cv2.waitKey(1) & 0xFF in (27, ord('q')):
-                break
-                
-    cv2.destroyAllWindows()
+                frame_bgr = capture_bgr(screen_capture, search_region)
+                detection_result = vision.analyze_frame(frame_bgr, detection_scale, bar_tracker.bar_column)
+                bar_tracker.update(detection_result, frame_start_time)
+
+                if bot_enabled:
+                    previous_state = fishing_session.current_state
+                    for action in fishing_session.update(detection_result, frame_start_time):
+                        input_control.queue_action(action)
+                    # the notification shows up while collecting, so start reading it when the minigame ends
+                    if previous_state != fishing.STATE_COLLECTING and fishing_session.current_state == fishing.STATE_COLLECTING:
+                        catch_watcher.start(frame_start_time)
+
+                catch_result = catch_watcher.update(capture_notification, frame_start_time)
+                if catch_result is not None and catch_result[0] == "confirmed":
+                    _, catch_name, catch_amount, notification_bgr = catch_result
+                    confirmed_catch_count += 1
+                    print(f"[CATCH] Confirmed: {catch_name} x{catch_amount}")
+                    catch_detection.report_catch(notification_bgr, catch_name, catch_amount, confirmed_catch_count)
+                elif catch_result is not None:
+                    print("[CATCH] No catch notification after the minigame.")
+                    events.emit(events.EVENT_CATCH_MISSED)
+
+                fps = 0.9 * fps + 0.1 / max(frame_start_time - previous_frame_time, 1e-6)
+                previous_frame_time = frame_start_time
+
+                if bot_enabled:
+                    run_time = frame_start_time - run_start_time
+                    status_label = STATE_LABELS.get(fishing_session.current_state, "IDLE")
+                else:
+                    run_time, status_label = 0.0, "STOPPED"
+                if status_label != last_status_label:
+                    last_status_label = status_label
+                    events.emit(events.EVENT_STATUS_CHANGED, status=status_label)
+                status_hud.update(build_status_text(
+                    run_time,
+                    status_label,
+                    catch_watcher.last_catch if bot_enabled else None,
+                    fps if debug_mode is not None else None,
+                ))
+
+                if debug_overlay is not None:
+                    debug_overlay.update(detection_result, bar_tracker.bar_box())
+                    notification_overlay.set_label("notification", catch_watcher.status_label())
+                elif debug_window is not None:
+                    debug_frame = overlays.draw_debug_frame(
+                        frame_bgr,
+                        overlays.search_debug_boxes(frame_bgr, detection_result, bar_tracker.bar_box()),
+                        screen_scale,
+                    )
+                    debug_window.show(debug_frame, search_region, monitor)
+                    notification_bgr = capture_notification()
+                    notification_debug_frame = overlays.draw_debug_frame(
+                        notification_bgr,
+                        {"notification": (0, 0, notification_bgr.shape[1], notification_bgr.shape[0])},
+                        screen_scale,
+                        {"notification": catch_watcher.status_label()},
+                    )
+                    notification_window.show(notification_debug_frame, notification_region, monitor)
+
+                root_window.update()
+
+                # sleep the rest of the frame budget instead of spinning at max fps
+                frame_budget = 1.0 / target_fps_for(bot_enabled, fishing_session.current_state)
+                remaining_time = frame_budget - (time.perf_counter() - frame_start_time)
+                if remaining_time > 0:
+                    time.sleep(remaining_time)
+        finally:
+            input_control.release_all_inputs()
+            keyboard.unhook_all()
+            for debug_view in (debug_window, notification_window):
+                if debug_view is not None:
+                    debug_view.close()
+            root_window.destroy()
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Slayers2 auto-fishing bot")
+    subparsers = parser.add_subparsers(dest="command")
+    debug_parser = subparsers.add_parser(
+        "debug", help="show the search and notification regions, bar, zone, and marker (overlay by default)"
+    )
+    debug_mode_group = debug_parser.add_mutually_exclusive_group()
+    debug_mode_group.add_argument(
+        "--overlay", action="store_true", help="draw click-through boxes directly over the screen (default)"
+    )
+    debug_mode_group.add_argument(
+        "--window", action="store_true", help="open separate windows with the captured search and notification regions"
+    )
+    return parser.parse_args()
+
+
+def resolve_debug_mode(command_line_args):
+    if command_line_args.command != "debug":
+        return None
+    return "window" if command_line_args.window else "overlay"
+
 
 if __name__ == "__main__":
+    command_line_args = parse_args()
+    enable_dpi_awareness()
+    input_control.start_input_worker()
+    integrations.register_integrations()
     try:
-        run_live()
-    except Exception as e:
-        print(f"\nОшибка при работе: {e}")
+        run_live(resolve_debug_mode(command_line_args))
+    except KeyboardInterrupt:
+        print("\nExiting.")
+    except Exception as error:
+        print(f"\nRuntime error: {error}")
         input()
