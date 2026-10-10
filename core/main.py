@@ -42,7 +42,7 @@ def format_uptime(elapsed_seconds):
 
 
 def build_status_text(elapsed_seconds, status_label, fps=None):
-    # uptime on top, the current phase below, fps only in debug modes
+    # run time since the last start on top, the current phase below, fps only in debug modes
     status_lines = [format_uptime(elapsed_seconds), status_label]
     if fps is not None:
         status_lines.append(f"{fps:.0f} FPS")
@@ -65,6 +65,13 @@ def guarded_hotkey(requested_event, selection_active):
         if not selection_active.is_set():
             requested_event.set()
     return on_hotkey
+
+
+def reset_bot_run(fishing_session, bar_tracker, current_time):
+    # cancel queued and running input, release everything, and return to the first phase
+    input_control.cancel_and_release()
+    fishing_session.reset(current_time)
+    bar_tracker.reset()
 
 
 def run_live(debug_mode):
@@ -96,8 +103,8 @@ def run_live(debug_mode):
         bar_tracker = vision.BarTracker()
         bot_enabled = False
 
-        start_time = time.perf_counter()
-        previous_frame_time = start_time
+        run_start_time = time.perf_counter()
+        previous_frame_time = run_start_time
         fps = 0.0
 
         print(f"Screen: {monitor['width']}x{monitor['height']}, search region: {search_region}")
@@ -114,9 +121,9 @@ def run_live(debug_mode):
                     selection_requested.clear()
                     if bot_enabled:
                         bot_enabled = False
-                        input_control.release_mouse_if_pressing(fishing_session)
-                        print("[BOT] Paused for region selection.")
-                    status_hud.update(build_status_text(frame_start_time - start_time, "SELECTING REGION"))
+                        reset_bot_run(fishing_session, bar_tracker, frame_start_time)
+                        print("[BOT] Stopped for region selection.")
+                    status_hud.update(build_status_text(0.0, "SELECTING REGION"))
                     selection_active.set()
                     try:
                         selected_region = region.select_search_region(
@@ -139,16 +146,14 @@ def run_live(debug_mode):
                 if toggle_requested.is_set():
                     toggle_requested.clear()
                     bot_enabled = not bot_enabled
-                    print(f"\n[BOT] Status: {'ENABLED' if bot_enabled else 'PAUSED'}")
+                    print(f"\n[BOT] Status: {'STARTED' if bot_enabled else 'STOPPED'}")
+                    # both directions start from scratch: stop all input, reset the phase and the run timer
+                    reset_bot_run(fishing_session, bar_tracker, frame_start_time)
+                    run_start_time = frame_start_time
                     if bot_enabled:
-                        fishing_session.reset(frame_start_time)
-                        bar_tracker.reset()
-                        input_control.input_action_queue.put("click")
-                    else:
-                        input_control.release_mouse_if_pressing(fishing_session)
+                        input_control.queue_action("click")
 
-                if input_control.collect_sequence_done.is_set():
-                    input_control.collect_sequence_done.clear()
+                if input_control.consume_collect_done():
                     if bot_enabled and fishing_session.current_state == fishing.STATE_COLLECTING:
                         fishing_session.reset(frame_start_time)
 
@@ -158,15 +163,17 @@ def run_live(debug_mode):
 
                 if bot_enabled:
                     for action in fishing_session.update(detection_result, frame_start_time):
-                        input_control.input_action_queue.put(action)
+                        input_control.queue_action(action)
 
                 fps = 0.9 * fps + 0.1 / max(frame_start_time - previous_frame_time, 1e-6)
                 previous_frame_time = frame_start_time
 
-                status_label = STATE_LABELS.get(fishing_session.current_state, "IDLE") if bot_enabled else "PAUSED"
-                status_hud.update(build_status_text(
-                    frame_start_time - start_time, status_label, fps if debug_mode is not None else None
-                ))
+                if bot_enabled:
+                    run_time = frame_start_time - run_start_time
+                    status_label = STATE_LABELS.get(fishing_session.current_state, "IDLE")
+                else:
+                    run_time, status_label = 0.0, "STOPPED"
+                status_hud.update(build_status_text(run_time, status_label, fps if debug_mode is not None else None))
 
                 if debug_overlay is not None:
                     debug_overlay.update(detection_result, bar_tracker.bar_box())
