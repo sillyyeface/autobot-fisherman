@@ -29,9 +29,9 @@ pydirectinput.FAILSAFE = False
 CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.json"
 
 # vision frame rate per bot phase; only the minigame needs fast reactions
-TARGET_FPS_MINIGAME = 30
-TARGET_FPS_WAITING = 10
-TARGET_FPS_IDLE = 10  # paused or collecting
+TARGET_FPS_MINIGAME = 60
+TARGET_FPS_WAITING = 30
+TARGET_FPS_IDLE = 30  # paused or collecting
 
 # status hud settings in 1080p pixels, scaled by the screen height
 STATUS_HUD_POSITION = (16, 16)
