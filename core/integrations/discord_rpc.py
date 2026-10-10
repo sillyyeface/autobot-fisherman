@@ -6,7 +6,7 @@ import asyncio
 import threading
 import time
 
-from pypresence import Presence
+from pypresence import Presence, StatusDisplayType
 
 import events
 import settings
@@ -31,8 +31,18 @@ def build_presence_fields():
         status = presence_state["status"]
         run_start_epoch = presence_state["run_start_epoch"]
         confirmed_total = presence_state["confirmed_total"]
-    presence_fields = {"details": status.capitalize(), "state": f"Caught: {confirmed_total}"}
-    if run_start_epoch is not None:
+    is_running = run_start_epoch is not None
+    # details is the line shown next to the game icon in the member list
+    presence_fields = {
+        "details": "Fishing..." if is_running else "Stopped",
+        "state": f"{status.capitalize()} | Caught: {confirmed_total}" if is_running else f"Caught: {confirmed_total}",
+        "status_display_type": StatusDisplayType.DETAILS,
+    }
+    if settings.DISCORD_RPC_LARGE_IMAGE:
+        # the hover text of the large image needs an image to attach to
+        presence_fields["large_image"] = settings.DISCORD_RPC_LARGE_IMAGE
+        presence_fields["large_text"] = "Fisherman"
+    if is_running:
         # discord shows the elapsed time next to the text
         presence_fields["start"] = int(run_start_epoch)
     return presence_fields

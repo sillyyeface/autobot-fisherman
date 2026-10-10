@@ -65,3 +65,5 @@ DISCORD_SEND_SNAPSHOT = True  # attach the notification snapshot where a message
 # create an application at discord.com/developers/applications and paste its application id here; the app name is shown as the game name
 DISCORD_RPC_ENABLED = True
 DISCORD_RPC_CLIENT_ID = "1558588546942763130"
+# large image: an asset key from the application's rich presence art assets (or an https image url); its hover text is "Fisherman"
+DISCORD_RPC_LARGE_IMAGE = ""

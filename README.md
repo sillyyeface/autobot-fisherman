@@ -69,7 +69,7 @@ Everything you would normally tune is in `core/settings.py`:
 - status HUD: `STATUS_HUD_*`
 - catch confirmation: `CATCH_WATCH_TIMEOUT`, `CATCH_READ_INTERVAL`, `CATCH_CONFIRM_READS`, `CATCH_OCR_LANGUAGE`, `CATCH_SAVE_SNAPSHOTS`
 - detection colors (advanced): `ZONE_HSV_*`, `MARKER_HSV_*`, `CATCH_TEXT_HSV_*` (notification text)
-- integrations: `DISCORD_WEBHOOK_ENABLED`, `DISCORD_SEND_SNAPSHOT` (the webhook url itself is in `config.json`), `DISCORD_RPC_ENABLED`, `DISCORD_RPC_CLIENT_ID`
+- integrations: `DISCORD_WEBHOOK_ENABLED`, `DISCORD_SEND_SNAPSHOT` (the webhook url itself is in `config.json`), `DISCORD_RPC_ENABLED`, `DISCORD_RPC_CLIENT_ID`, `DISCORD_RPC_LARGE_IMAGE`
 
 The regions are not set here: they are selected on launch and saved to `config.json`. `DEFAULT_SEARCH_REGION` and `DEFAULT_NOTIFICATION_REGION` are only the starting boxes.
 
@@ -90,7 +90,8 @@ To add an integration, create `core/integrations/<name>.py` with a `register()` 
 Shows the run timer, the current status, and the confirmed catches of this run on your Discord profile.
 1. Create an application at discord.com/developers/applications; its name is shown as the game name.
 2. Copy the Application ID into `DISCORD_RPC_CLIENT_ID` in `core/settings.py` and keep `DISCORD_RPC_ENABLED = True`.
-3. Run with the Discord desktop client open (if it is closed, the bot keeps retrying). Discord accepts one update per 15 s, so status changes are merged. Stopping the bot removes the timer.
+3. Optional: upload an image in the application's Rich Presence > Art Assets and put its key into `DISCORD_RPC_LARGE_IMAGE`; hovering it shows "Fisherman".
+4. Run with the Discord desktop client open (if it is closed, the bot keeps retrying). Discord accepts one update per 15 s, so status changes are merged. Stopping the bot removes the timer.
 
 ### Discord webhook
 1. In Discord: channel settings > Integrations > Webhooks > New Webhook > Copy Webhook URL.
