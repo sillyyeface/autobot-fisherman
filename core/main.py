@@ -34,7 +34,7 @@ TARGET_FPS_WAITING = 30
 TARGET_FPS_IDLE = 30  # paused or collecting
 
 # status hud settings in 1080p pixels, scaled by the screen height
-STATUS_HUD_POSITION = (16, 16)
+STATUS_HUD_POSITION = (16, 72)  # below the roblox top bar buttons
 STATUS_HUD_PADDING = (10, 6)
 STATUS_HUD_FONT_SIZE = 15
 STATUS_HUD_BACKGROUND_ALPHA = 0.55
