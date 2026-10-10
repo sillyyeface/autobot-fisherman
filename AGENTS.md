@@ -6,8 +6,13 @@
 - The bot starts paused, uses `K` to toggle fishing, `L` to select the search region, and `ESC` to exit.
 - Debug modes: `main.py debug [--overlay]` for click-through boxes and `main.py debug --window` for a cv2 preview window.
 - The process is DPI aware; all coordinates are physical pixels. Pixel constants in `fishing.py` are 1080p reference values scaled by `DetectionScale`.
-- The search region is stored in the git-ignored `config.json` as monitor fractions.
-- Overlay windows are click-through and excluded from screen capture; debug colors stay outside the detection HSV ranges.
+- The search region is stored in the git-ignored `config.json` as monitor fractions; only the primary monitor is supported.
+- The marker is searched only inside the bar column derived from the zone; `BarTracker` keeps that column for `BAR_FORGET_TIMEOUT` when the zone flickers.
+- `FishingSession.should_press` holds while the predicted marker is below the predicted zone center; `PREDICTION_TIME` is the main tuning knob and should stay validated against real gameplay.
+- Overlay windows are click-through, non-activating, and excluded from screen capture; debug colors stay outside the detection HSV ranges (no yellow, green, or white).
+- The status HUD sits below the Roblox top bar (`STATUS_HUD_POSITION`, 1080p pixels).
+- Hotkey callbacks only set events; all state changes happen in the main loop thread.
+- Vision runs at `TARGET_FPS_MINIGAME` during the minigame and `TARGET_FPS_WAITING` / `TARGET_FPS_IDLE` otherwise.
 
 ## Coding conventions
 - Keep changes small and targeted. This project is a focused bot script, not a broad framework.
