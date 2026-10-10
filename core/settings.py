@@ -60,3 +60,8 @@ CATCH_TEXT_HSV_LO, CATCH_TEXT_HSV_HI = (0, 0, 170), (180, 70, 255)
 # (channel settings > integrations > webhooks > copy webhook url); message formats are in discord_messages.json
 DISCORD_WEBHOOK_ENABLED = True  # send notifications to discord when a webhook url is configured
 DISCORD_SEND_SNAPSHOT = True  # attach the notification snapshot where a message uses {snapshot}
+
+# discord rich presence: run timer, status, and confirmed catches on your discord profile (needs the desktop client)
+# create an application at discord.com/developers/applications and paste its application id here; the app name is shown as the game name
+DISCORD_RPC_ENABLED = True
+DISCORD_RPC_CLIENT_ID = ""

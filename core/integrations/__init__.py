@@ -2,9 +2,11 @@
 # a new integration is a module with a register() function that subscribes to events
 
 import settings
-from integrations import discord_webhook
+from integrations import discord_rpc, discord_webhook
 
 
 def register_integrations():
     if settings.DISCORD_WEBHOOK_ENABLED:
         discord_webhook.register()
+    if settings.DISCORD_RPC_ENABLED:
+        discord_rpc.register()

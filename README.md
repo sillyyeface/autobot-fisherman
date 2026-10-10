@@ -11,6 +11,7 @@ Auto-fishing macro for the Roblox game Slayers2. It watches a selected part of t
 - Hang protection: a minigame that lasts over 30 s is treated as stuck, the bot collects and recasts.
 - Always-visible status HUD in the top-left corner: run time since start, the current phase, and the last confirmed catch.
 - All tunables in one file: `core/settings.py`.
+- Discord rich presence (run timer, status, confirmed catches).
 - Discord webhook notifications with your own message and embed format (`discord_messages.json`), including the catch snapshot.
 - Event hub for integrations (Rich Presence and others can be added).
 - Debug modes: labeled click-through overlay over the screen or a separate vision window.
@@ -68,7 +69,7 @@ Everything you would normally tune is in `core/settings.py`:
 - status HUD: `STATUS_HUD_*`
 - catch confirmation: `CATCH_WATCH_TIMEOUT`, `CATCH_READ_INTERVAL`, `CATCH_CONFIRM_READS`, `CATCH_OCR_LANGUAGE`, `CATCH_SAVE_SNAPSHOTS`
 - detection colors (advanced): `ZONE_HSV_*`, `MARKER_HSV_*`, `CATCH_TEXT_HSV_*` (notification text)
-- integrations: `DISCORD_WEBHOOK_ENABLED`, `DISCORD_SEND_SNAPSHOT` (the webhook url itself is in `config.json`)
+- integrations: `DISCORD_WEBHOOK_ENABLED`, `DISCORD_SEND_SNAPSHOT` (the webhook url itself is in `config.json`), `DISCORD_RPC_ENABLED`, `DISCORD_RPC_CLIENT_ID`
 
 The regions are not set here: they are selected on launch and saved to `config.json`. `DEFAULT_SEARCH_REGION` and `DEFAULT_NOTIFICATION_REGION` are only the starting boxes.
 
@@ -85,6 +86,12 @@ The regions are not set here: they are selected on launch and saved to `config.j
 | `catch_missed` | - |
 
 To add an integration, create `core/integrations/<name>.py` with a `register()` function that calls `events.subscribe(...)`, add an enable flag to `settings.py`, and register it in `core/integrations/__init__.py`. 
+### Discord rich presence
+Shows the run timer, the current status, and the confirmed catches of this run on your Discord profile.
+1. Create an application at discord.com/developers/applications; its name is shown as the game name.
+2. Copy the Application ID into `DISCORD_RPC_CLIENT_ID` in `core/settings.py` and keep `DISCORD_RPC_ENABLED = True`.
+3. Run with the Discord desktop client open (if it is closed, the bot keeps retrying). Discord accepts one update per 15 s, so status changes are merged. Stopping the bot removes the timer.
+
 ### Discord webhook
 1. In Discord: channel settings > Integrations > Webhooks > New Webhook > Copy Webhook URL.
 2. In `core/settings.py` set `DISCORD_WEBHOOK_ENABLED = True`. Paste the URL into `discord_webhook_url` in `config.json` in the project root (the key is added empty on the first run with the webhook enabled). `config.json` is git-ignored, because anyone with the URL can post to the channel:
@@ -117,7 +124,7 @@ core/region.py          region storage and the startup selection screen
 core/catch_detection.py catch notification ocr and confirmation
 core/overlays.py        status HUD, debug overlay and window
 core/events.py          event hub for integrations
-core/integrations/      optional integrations (discord webhook stub)
+core/integrations/      optional integrations (discord webhook, discord rich presence)
 config.json             per-user regions and discord webhook url (git-ignored)
 catches/                snapshots of confirmed catch notifications (git-ignored)
 discord_messages.json   discord message formats per event
