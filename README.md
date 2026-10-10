@@ -6,7 +6,8 @@ Auto-fishing macro for the Roblox game Slayers2. It watches a selected part of t
 - Works on any resolution and Windows display scaling: detection thresholds scale with the screen height.
 - Selectable search region (`L`), saved per user in `config.json` as screen fractions.
 - Predictive marker control: keeps the marker in the center of the zone using marker and zone speed.
-- Automatic catch sequence and recast, plus a recast after 30 s without a bite.
+- Automatic catch sequence and recast, plus a recast after 60 s without a bite.
+- Hang protection: a minigame that lasts over 30 s is treated as stuck, the bot collects and recasts.
 - Always-visible status HUD in the top-left corner: run time since start on top, the current phase below.
 - All tunables in one file: `core/settings.py`.
 - Event hub for integrations (Discord webhook stub included, Rich Presence and others can be added).
@@ -57,7 +58,7 @@ python core/main.py debug --window
 ## Settings
 Everything you would normally tune is in `core/settings.py`:
 - hotkeys: `HOTKEY_TOGGLE`, `HOTKEY_SELECT_REGION`, `HOTKEY_EXIT`
-- fishing timings: `HOLD_T_DURATION`, `DISAPPEAR_TIMEOUT`, `WAITING_TIMEOUT`
+- fishing timings: `HOLD_T_DURATION`, `DISAPPEAR_TIMEOUT`, `WAITING_TIMEOUT` (60 s), `MINIGAME_TIMEOUT` (30 s)
 - marker control: `PREDICTION_TIME` (0.2 s) - raise to 0.25-0.3 if the marker overshoots the zone up and down, lower to 0.15 if it reacts late; `ZONE_TARGET_OFFSET` moves the target point inside the zone, positive is lower
 - vision rate: `TARGET_FPS_MINIGAME`, `TARGET_FPS_WAITING`, `TARGET_FPS_IDLE`
 - status HUD: `STATUS_HUD_*`

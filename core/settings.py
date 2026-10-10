@@ -9,7 +9,8 @@ HOTKEY_EXIT = "esc"
 # fishing loop timings in seconds
 HOLD_T_DURATION = 8.0      # hold t while collecting the catch
 DISAPPEAR_TIMEOUT = 0.35   # bar must be missing this long before the minigame counts as finished
-WAITING_TIMEOUT = 30.0     # recast the rod after this long without a bite
+WAITING_TIMEOUT = 60.0     # recast the rod after this long without a bite
+MINIGAME_TIMEOUT = 30.0    # a minigame never lasts longer; after this the bot collects and recasts
 
 # marker control: hold while the predicted marker is below the predicted target point in the zone
 PREDICTION_TIME = 0.2      # look-ahead, about twice the capture-to-game latency; raise if the marker overshoots

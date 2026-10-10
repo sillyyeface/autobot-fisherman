@@ -18,6 +18,7 @@
 - Overlay windows are click-through, non-activating, and excluded from screen capture; debug colors stay outside the detection HSV ranges (no yellow, green, or white).
 - The status HUD sits below the Roblox top bar (`STATUS_HUD_POSITION`, 1080p pixels).
 - Hotkey callbacks only set events; all state changes happen in the main loop thread.
+- `MINIGAME_TIMEOUT` ends a minigame that never loses its detection; `WAITING_TIMEOUT` recasts when no bite comes.
 - Vision runs at `TARGET_FPS_MINIGAME` during the minigame and `TARGET_FPS_WAITING` / `TARGET_FPS_IDLE` otherwise.
 
 ## Coding conventions

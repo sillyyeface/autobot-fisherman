@@ -24,6 +24,7 @@ class FishingSession:
         self.is_pressing = False
         self.last_seen_time = current_time
         self.wait_start_time = current_time
+        self.minigame_start_time = current_time
         self._reset_motion()
 
     def _reset_motion(self):
@@ -77,6 +78,7 @@ class FishingSession:
                 print("[BOT] Fishing bar detected. Starting the minigame...")
                 self.current_state = STATE_MINIGAME
                 self.last_seen_time = current_time
+                self.minigame_start_time = current_time
             elif current_time - self.wait_start_time >= settings.WAITING_TIMEOUT:
                 print(f"[BOT] No bite for {settings.WAITING_TIMEOUT:.0f}s. Recasting the rod...")
                 actions.append("click")
@@ -84,7 +86,17 @@ class FishingSession:
 
         elif self.current_state == STATE_MINIGAME:
             # keep the marker in the zone and watch for the bar to disappear
-            if has_detection_geometry:
+            if current_time - self.minigame_start_time >= settings.MINIGAME_TIMEOUT:
+                # a real minigame never lasts this long, so the detection is stuck on something else
+                print(f"[BOT] Minigame lasted over {settings.MINIGAME_TIMEOUT:.0f}s. Collecting and recasting...")
+                self._reset_motion()
+                if self.is_pressing:
+                    actions.append("up")
+                    self.is_pressing = False
+                self.current_state = STATE_COLLECTING
+                actions.append("collect_sequence")
+
+            elif has_detection_geometry:
                 self.last_seen_time = current_time
 
                 if "marker_center_y" in detection_result and "zone_bottom" in detection_result:
