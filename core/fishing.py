@@ -4,15 +4,9 @@
 import cv2
 import numpy as np
 
-# game settings
-HOLD_T_DURATION = 8.0      # seconds to hold t while collecting the catch
-DISAPPEAR_TIMEOUT = 0.35   # delay before confirming the minigame ended
-WAITING_TIMEOUT = 30.0     # seconds without a bite before recasting the rod
-BAR_FORGET_TIMEOUT = 1.0   # seconds without a zone before the remembered bar position is dropped
+import settings
 
-# marker control: hold while the predicted marker is below the predicted target point in the zone
-PREDICTION_TIME = 0.2      # look-ahead in seconds, should be about twice the capture-to-game latency
-ZONE_TARGET_OFFSET = 0.0   # target point as a fraction of zone height from its center, positive is lower
+BAR_FORGET_TIMEOUT = 1.0   # seconds without a zone before the remembered bar position is dropped
 VELOCITY_SMOOTHING = 0.5   # weight of the newest velocity sample
 VELOCITY_MAX_GAP = 0.2     # seconds between samples after which velocities restart from zero
 
@@ -23,20 +17,6 @@ STATE_COLLECTING = "COLLECTING"  # collect the catch and recast
 
 # pixel constants below are tuned on a 1080p screen and scaled by the real screen height
 REFERENCE_SCREEN_HEIGHT = 1080
-
-# default search region as screen fractions, equal to the original 1920x1080 capture box
-DEFAULT_SEARCH_REGION = {
-    "left": 1380 / 1920,
-    "top": 280 / 1080,
-    "width": 180 / 1920,
-    "height": 480 / 1080,
-}
-
-# hsv color ranges for the yellow-green zone and white marker
-# measured: zone h 38-43 s 84-114 v 73-87, marker s 6-18 v 188-222, bar and water s 110+ or v below 125
-# the marker range is loose so the marker is still found when the translucent zone tints it
-ZONE_HSV_LO, ZONE_HSV_HI = (15, 40, 40), (85, 255, 255)
-MARKER_HSV_LO, MARKER_HSV_HI = (0, 0, 140), (180, 90, 255)
 
 ZONE_MIN_AREA = 40
 MARKER_MIN_AREA = 80
@@ -71,14 +51,14 @@ def _largest_contour_box(mask, minimum_area):
 
 def find_zone(hsv_frame, detection_scale):
     # detect the yellow-green catch zone
-    mask = cv2.inRange(hsv_frame, ZONE_HSV_LO, ZONE_HSV_HI)
+    mask = cv2.inRange(hsv_frame, settings.ZONE_HSV_LO, settings.ZONE_HSV_HI)
     mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, detection_scale.zone_close_kernel)
     return _largest_contour_box(mask, detection_scale.zone_min_area)
 
 
 def find_marker(hsv_frame, detection_scale):
     # detect the white tracking marker
-    mask = cv2.inRange(hsv_frame, MARKER_HSV_LO, MARKER_HSV_HI)
+    mask = cv2.inRange(hsv_frame, settings.MARKER_HSV_LO, settings.MARKER_HSV_HI)
     mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, MARKER_OPEN_KERNEL)
     return _largest_contour_box(mask, detection_scale.marker_min_area)
 
@@ -207,11 +187,11 @@ class FishingSession:
         marker_center_y = detection_result["marker_center_y"]
         self._update_motion(marker_center_y, zone_center_y, current_time)
 
-        predicted_marker_y = marker_center_y + self.marker_velocity * PREDICTION_TIME
+        predicted_marker_y = marker_center_y + self.marker_velocity * settings.PREDICTION_TIME
         predicted_target_y = (
             zone_center_y
-            + self.zone_velocity * PREDICTION_TIME
-            + ZONE_TARGET_OFFSET * (zone_bottom - zone_top)
+            + self.zone_velocity * settings.PREDICTION_TIME
+            + settings.ZONE_TARGET_OFFSET * (zone_bottom - zone_top)
         )
         return predicted_marker_y > predicted_target_y
 
@@ -227,8 +207,8 @@ class FishingSession:
                 print("[BOT] Fishing bar detected. Starting the minigame...")
                 self.current_state = STATE_MINIGAME
                 self.last_seen_time = current_time
-            elif current_time - self.wait_start_time >= WAITING_TIMEOUT:
-                print(f"[BOT] No bite for {WAITING_TIMEOUT:.0f}s. Recasting the rod...")
+            elif current_time - self.wait_start_time >= settings.WAITING_TIMEOUT:
+                print(f"[BOT] No bite for {settings.WAITING_TIMEOUT:.0f}s. Recasting the rod...")
                 actions.append("click")
                 self.wait_start_time = current_time
 
@@ -254,8 +234,8 @@ class FishingSession:
                     actions.append("up")
                     self.is_pressing = False
 
-                if current_time - self.last_seen_time >= DISAPPEAR_TIMEOUT:
-                    print(f"[BOT] Fishing bar missing for more than {DISAPPEAR_TIMEOUT}s. Minigame complete.")
+                if current_time - self.last_seen_time >= settings.DISAPPEAR_TIMEOUT:
+                    print(f"[BOT] Fishing bar missing for more than {settings.DISAPPEAR_TIMEOUT}s. Minigame complete.")
                     self.current_state = STATE_COLLECTING
                     actions.append("collect_sequence")
 

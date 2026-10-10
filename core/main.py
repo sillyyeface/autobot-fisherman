@@ -20,6 +20,7 @@ import win32con
 import win32gui
 
 import fishing
+import settings
 
 # input stability settings
 pydirectinput.PAUSE = 0.001
@@ -27,17 +28,6 @@ pydirectinput.FAILSAFE = False
 
 # per-user settings such as the selected search region, stored as screen fractions
 CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.json"
-
-# vision frame rate per bot phase; only the minigame needs fast reactions
-TARGET_FPS_MINIGAME = 60
-TARGET_FPS_WAITING = 30
-TARGET_FPS_IDLE = 30  # paused or collecting
-
-# status hud settings in 1080p pixels, scaled by the screen height
-STATUS_HUD_POSITION = (16, 72)  # below the roblox top bar buttons
-STATUS_HUD_PADDING = (10, 6)
-STATUS_HUD_FONT_SIZE = 15
-STATUS_HUD_BACKGROUND_ALPHA = 0.55
 
 STATE_LABELS = {
     fishing.STATE_WAITING: "WAITING FOR BITE",
@@ -102,7 +92,7 @@ def input_command_worker():
 
             print("[INPUT] Holding T to collect the catch...")
             pydirectinput.keyDown('t')
-            time.sleep(fishing.HOLD_T_DURATION)
+            time.sleep(settings.HOLD_T_DURATION)
             pydirectinput.keyUp('t')
             print("[INPUT] Catch collected.")
 
@@ -141,7 +131,7 @@ def load_search_fractions():
         stored_fractions = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))["search_region"]
         return {key: float(stored_fractions[key]) for key in ("left", "top", "width", "height")}
     except (OSError, ValueError, KeyError, TypeError):
-        return dict(fishing.DEFAULT_SEARCH_REGION)
+        return dict(settings.DEFAULT_SEARCH_REGION)
 
 
 def save_search_fractions(fractions):
@@ -189,20 +179,20 @@ class StatusHUD:
     # always-visible uptime and status text in the top-left corner on a semi-transparent black plate
 
     def __init__(self, root_window, screen_scale, monitor):
-        self.position_x = monitor["left"] + round(STATUS_HUD_POSITION[0] * screen_scale)
-        self.position_y = monitor["top"] + round(STATUS_HUD_POSITION[1] * screen_scale)
-        self.background = create_overlay_window(root_window, "black", alpha=STATUS_HUD_BACKGROUND_ALPHA)
+        self.position_x = monitor["left"] + round(settings.STATUS_HUD_POSITION[0] * screen_scale)
+        self.position_y = monitor["top"] + round(settings.STATUS_HUD_POSITION[1] * screen_scale)
+        self.background = create_overlay_window(root_window, "black", alpha=settings.STATUS_HUD_BACKGROUND_ALPHA)
         self.window = create_overlay_window(root_window, TRANSPARENT_KEY)
         self.label = tk.Label(
             self.window,
             text="",
             fg="#FFFFFF",
             bg=TRANSPARENT_KEY,
-            font=("Consolas", -round(STATUS_HUD_FONT_SIZE * screen_scale), "bold"),
+            font=("Consolas", -round(settings.STATUS_HUD_FONT_SIZE * screen_scale), "bold"),
             justify="left",
             anchor="w",
-            padx=round(STATUS_HUD_PADDING[0] * screen_scale),
-            pady=round(STATUS_HUD_PADDING[1] * screen_scale),
+            padx=round(settings.STATUS_HUD_PADDING[0] * screen_scale),
+            pady=round(settings.STATUS_HUD_PADDING[1] * screen_scale),
             borderwidth=0,
             highlightthickness=0,
         )
@@ -478,12 +468,12 @@ def build_status_text(elapsed_seconds, status_label, fps=None):
 
 def target_fps_for(bot_enabled, session_state):
     if not bot_enabled:
-        return TARGET_FPS_IDLE
+        return settings.TARGET_FPS_IDLE
     if session_state == fishing.STATE_MINIGAME:
-        return TARGET_FPS_MINIGAME
+        return settings.TARGET_FPS_MINIGAME
     if session_state == fishing.STATE_WAITING:
-        return TARGET_FPS_WAITING
-    return TARGET_FPS_IDLE
+        return settings.TARGET_FPS_WAITING
+    return settings.TARGET_FPS_IDLE
 
 
 def guarded_hotkey(requested_event, selection_active):
@@ -506,9 +496,9 @@ def run_live(debug_mode):
     toggle_requested = threading.Event()
     selection_requested = threading.Event()
     selection_active = threading.Event()
-    keyboard.add_hotkey('k', guarded_hotkey(toggle_requested, selection_active))
-    keyboard.add_hotkey('l', guarded_hotkey(selection_requested, selection_active))
-    keyboard.add_hotkey('esc', guarded_hotkey(stop_requested, selection_active))
+    keyboard.add_hotkey(settings.HOTKEY_TOGGLE, guarded_hotkey(toggle_requested, selection_active))
+    keyboard.add_hotkey(settings.HOTKEY_SELECT_REGION, guarded_hotkey(selection_requested, selection_active))
+    keyboard.add_hotkey(settings.HOTKEY_EXIT, guarded_hotkey(stop_requested, selection_active))
 
     root_window = tk.Tk()
     root_window.withdraw()  # hidden container for the overlay windows
@@ -532,7 +522,10 @@ def run_live(debug_mode):
         fps = 0.0
 
         print(f"Screen: {monitor['width']}x{monitor['height']}, search region: {search_region}")
-        print("Bot ready. K - start/pause, L - select search region, ESC - exit.")
+        print(
+            f"Bot ready. {settings.HOTKEY_TOGGLE.upper()} - start/pause, "
+            f"{settings.HOTKEY_SELECT_REGION.upper()} - select search region, {settings.HOTKEY_EXIT.upper()} - exit."
+        )
 
         try:
             while not stop_requested.is_set():
